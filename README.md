@@ -6,31 +6,20 @@
 ![Telegram](https://img.shields.io/badge/Telegram-Bot_API-26A5E4?logo=telegram&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-Асинхронный сервис для непрерывного мониторинга сайтов британских визовых операторов схемы сезонных рабочих (UK Seasonal Worker Scheme) и моментальной отправки уведомлений со скриншотом в Telegram при открытии регистрационных анкет.
+Асинхронный сервис мониторинга сайтов визовых операторов UK Seasonal Worker Scheme с мгновенной отправкой уведомлений со скриншотом в Telegram при открытии регистрационных форм.
 
 ---
 
-## Ключевые возможности
+## Возможности
 
-- **Асинхронный опрос в реальном времени:**
-  - Неблокирующий цикл на базе `asyncio` и `aiohttp` с интервалом проверки от 30 секунд.
-  - Эмуляция заголовков современного браузера для предотвращения ложных блокировок со стороны WAF.
-- **Специализированные детекторы:**
-  - **Google Forms:** отслеживание редиректов (`/closedform` -> `/viewform`) и анализ DOM на появление интерактивных полей ввода.
-  - **Best Opportunity Website:** мониторинг главной страницы и раздела `/recrutare` на появление новых ссылок и iframe-форм.
-  - **HOPS Labour Solutions:** regex-сканирование страницы инструкций по набору на предмет упоминания стран, дат набора и прямых ссылок на регистрационные порталы (*The Gateway*, *Global-Workforce*).
-  - **Concordia UK:** отслеживание обновлений страницы сезонного набора.
-- **Визуальное подтверждение и скриншоты:**
-  - Автоматический рендеринг страницы через headless-браузер **Playwright Chromium** при фиксации события открытия формы.
-  - Сохранение полноэкранного снимка высокого разрешения в локальный каталог `data/screenshots/`.
-- **Оповещения в Telegram:**
-  - Отправка экстренного сообщения со скриншотом и подробным описанием изменений.
-  - Интерактивная inline-кнопка для быстрого перехода к открывшейся анкете в один клик.
-  - Периодический отчет о статусе работы сервиса (Heartbeat).
-- **Отказоустойчивость:**
-  - Атомарное сохранение состояния в `data/monitor_state.json`.
-  - Корректная обработка сетевых сбоев и таймаутов без падения процесса.
-  - Поддержка мягкой остановки (graceful shutdown) по сигналам `SIGINT` и `SIGTERM`.
+- Асинхронный опрос целевых ресурсов через `asyncio` + `aiohttp` с пулом соединений и retry (exponential backoff)
+- Специализированные детекторы для Google Forms, Best Opportunity, HOPS Labour Solutions и Concordia UK
+- Скриншоты через headless Playwright Chromium (singleton, resource blocking)
+- Уведомления в Telegram с inline-кнопкой перехода к анкете, plaintext fallback при ошибках парсинга
+- Уведомления о закрытии формы (`RESOLVED`)
+- Периодический heartbeat-отчет о статусе
+- Атомарная персистенция состояния с автоматическим бэкапом
+- Graceful shutdown по `SIGINT` / `SIGTERM`
 
 ---
 
@@ -43,40 +32,46 @@ graph TD
     end
 
     subgraph Engine ["Ядро мониторинга"]
-        HTTP["HTTP Client (aiohttp)"]
-        Detectors["Модули детекторов"]
-        State["State Storage (JSON)"]
+        Semaphore["Semaphore (max 4)"]
+        HTTP["HTTP Client (aiohttp + TCPConnector)"]
+        Retry["Retry (exponential backoff)"]
+        Detectors["Детекторы"]
+        State["State (JSON + backup)"]
     end
 
     subgraph Verification ["Скриншотер"]
-        Browser["Playwright Chromium Headless"]
+        Browser["Playwright Chromium (singleton)"]
     end
 
     subgraph Notifications ["Оповещения"]
         Telegram["Telegram Bot API"]
+        Fallback["Plaintext Fallback"]
     end
 
-    Loop --> HTTP
-    HTTP --> Detectors
+    Loop --> Semaphore
+    Semaphore --> HTTP
+    HTTP --> Retry
+    Retry --> Detectors
     Detectors <--> State
-    Detectors -->|Форма открыта / Изменение| Browser
+    Detectors -->|Изменение статуса| Browser
     Browser --> Telegram
+    Telegram -->|HTTP 400| Fallback
 ```
 
-Подробное описание архитектуры, детекторов и алгоритмов сравнения приведено в файле [docs/architecture.md](./docs/architecture.md).
+Подробное описание компонентов, детекторов и механизмов отказоустойчивости: [docs/architecture.md](./docs/architecture.md).
 
 ---
 
-## Стек технологий
+## Стек
 
-| Категория | Технология | Версия | Назначение |
-|-----------|-----------|--------|------------|
-| Язык | Python | 3.12+ | Основной язык разработки |
-| Асинхронность | Asyncio, aiohttp | 3.10+ | Неблокирующий HTTP-клиент и цикл событий |
-| Браузерный движок | Playwright (Chromium) | 1.46+ | Снятие полноэкранных скриншотов |
-| Парсинг HTML | BeautifulSoup4 | 4.12+ | Анализ DOM-структуры и извлечение ссылок |
-| Оповещения | Telegram Bot API | latest | Доставка алертов с фото и кнопками |
-| Контейнеризация | Docker, Docker Compose | latest | Изоляция окружения и автоперезапуск |
+| Категория | Технология | Назначение |
+|-----------|-----------|------------|
+| Язык | Python 3.12+ | Асинхронная логика мониторинга |
+| HTTP | aiohttp | Неблокирующий клиент с пулом соединений |
+| Браузер | Playwright Chromium | Headless-скриншоты с блокировкой тяжелых ресурсов |
+| Парсинг | BeautifulSoup4 | Анализ DOM и извлечение ссылок |
+| Оповещения | Telegram Bot API | Доставка алертов с фото и inline-кнопками |
+| Контейнеризация | Docker Compose | Изоляция, автоперезапуск, volume-монтирование |
 
 ---
 
@@ -84,71 +79,51 @@ graph TD
 
 | Ресурс | URL | Логика детекции |
 |--------|-----|-----------------|
-| Best Opportunity Google Form | `https://forms.gle/kkdrh8aNPQNHQkCk8` | Смена URL на `/viewform`, исчезновение текста закрытой формы, появление полей ввода |
-| Best Opportunity Web | `https://www.jobopportunityuk.com/` | Появление новых ссылок на Google Forms, изменение iframe или хэша страницы |
-| HOPS Recruitment Instructions | `https://www.hopslaboursolutions.com/recruitment-instructions` | Появление ссылок на регистрацию, regex-совпадения по странам и датам набора |
-| Concordia UK Portal | `https://www.concordia.org.uk/` | Изменение ссылок на форму сезонного набора |
+| Best Opportunity Form | `forms.gle/kkdrh8aNPQNHQkCk8` | Редирект `/closedform` -> `/viewform`, проверка полей ввода |
+| Best Opportunity Web | `jobopportunityuk.com` | Новые ссылки на формы, изменение iframe, хэш страницы |
+| HOPS Instructions | `hopslaboursolutions.com/recruitment-instructions` | Ссылки на регистрацию, regex по странам и датам |
+| Concordia UK | `concordia.org.uk` | Изменение ссылок на форму набора |
 
 ---
 
 ## Быстрый старт
 
-### 1. Клонирование репозитория:
+**Клонирование и установка:**
 ```bash
 git clone https://github.com/booowieee/england-bot-watcher.git
 cd england-bot-watcher
-```
 
-### 2. Настройка виртуального окружения:
-```bash
 python -m venv venv
-
-# Windows:
-venv\Scripts\activate
-
-# Linux / macOS:
-source venv/bin/activate
+source venv/bin/activate  # Windows: venv\Scripts\activate
 
 pip install -r requirements.txt
 playwright install chromium
 ```
 
-### 3. Конфигурация:
-Создайте файл `.env` на основе шаблона `.env.example`:
-```ini
-TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrSTUvwxYZ
-TELEGRAM_CHAT_ID=123456789
-CHECK_INTERVAL_SECONDS=45
-HEARTBEAT_INTERVAL_HOURS=12
-ENABLE_SCREENSHOTS=true
-DEBUG_MODE=false
+**Конфигурация:**
+```bash
+cp .env.example .env
+# Заполнить TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID
 ```
 
-### 4. Тестовый прогон (Диагностика):
+**Диагностика:**
 ```bash
 python -m src.main --test
 ```
 
-### 5. Запуск в рабочем режиме:
+**Запуск:**
 ```bash
 python -m src.main
 ```
 
 ---
 
-## Развертывание в Docker Compose
-
-Для круглосуточной работы на сервере или VPS рекомендуется использовать Docker Compose.
+## Docker Compose
 
 ```bash
-# Сборка и фоновый запуск
-docker-compose up -d --build
-
-# Просмотр логов в реальном времени
-docker-compose logs -f
-
-# Остановка контейнера
-docker-compose down
+docker compose up -d --build    # сборка и запуск
+docker compose logs -f          # логи
+docker compose down             # остановка
 ```
 
 ---
@@ -158,35 +133,36 @@ docker-compose down
 ```text
 england-bot-watcher/
 ├── docs/
-│   └── architecture.md          # Подробное описание архитектуры и логики
-├── data/                        # Хранилище состояния и скриншотов
-│   ├── monitor_state.json       # Персистентное состояние целей
-│   └── screenshots/             # Сохраненные снимки экранов
-├── logs/                        # Ротируемые журналы работы
+│   └── architecture.md
+├── data/
+│   ├── monitor_state.json
+│   └── screenshots/
+├── logs/
 ├── src/
-│   ├── detectors/               # Модульные детекторы целевых сайтов
-│   │   ├── base.py              # Базовый интерфейс детектора
-│   │   ├── google_forms.py      # Детектор статуса Google Forms
-│   │   ├── hops_detector.py     # Детектор HOPS UK
-│   │   ├── best_opp_web.py      # Детектор сайта Best Opportunity
-│   │   └── concordia.py         # Детектор сайта Concordia UK
-│   ├── browser.py               # Playwright скриншотер
-│   ├── config.py                # Загрузка и валидация конфигурации
-│   ├── engine.py                # Ядро мониторинга и планировщик
-│   ├── logger.py                # Настройка логирования
-│   ├── models.py                # Модели данных и типы
-│   ├── notifier.py              # Клиент Telegram Bot API
-│   └── main.py                  # Точка входа в приложение
-├── .env.example                 # Шаблон переменных окружения
-├── .gitignore                   # Правила исключения файлов из git
-├── Dockerfile                   # Описание Docker-образа
-├── docker-compose.yml           # Конфигурация Docker Compose
-├── requirements.txt             # Список зависимостей Python
-└── README.md                    # Документация проекта
+│   ├── detectors/
+│   │   ├── base.py
+│   │   ├── google_forms.py
+│   │   ├── hops_detector.py
+│   │   ├── best_opp_web.py
+│   │   └── concordia.py
+│   ├── browser.py
+│   ├── config.py
+│   ├── engine.py
+│   ├── logger.py
+│   ├── models.py
+│   ├── notifier.py
+│   └── main.py
+├── .env.example
+├── .gitignore
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── LICENSE
+└── README.md
 ```
 
 ---
 
 ## Лицензия
 
-MIT License. См. [LICENSE](LICENSE) для подробностей.
+MIT License. См. [LICENSE](LICENSE).
