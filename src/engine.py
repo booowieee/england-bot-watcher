@@ -2,6 +2,7 @@ import asyncio
 import json
 import shutil
 from datetime import datetime, UTC, timedelta
+from pathlib import Path
 from typing import Dict, Any, List
 import aiohttp
 from src.config import Config
@@ -32,6 +33,7 @@ class MonitoringEngine:
         self._semaphore = asyncio.Semaphore(CONCURRENT_LIMIT)
         self.screenshot_engine = ScreenshotEngine()
         self.notifier: TelegramNotifier | None = None
+        self._poller_task: asyncio.Task | None = None
 
         self.detectors: Dict[str, BaseDetector] = {}
         for target in Config.TARGETS:
@@ -171,14 +173,23 @@ class MonitoringEngine:
             screenshot_path = await self.screenshot_engine.capture(result.url, result.target_id)
             result.screenshot_path = screenshot_path
 
-            await self.notifier.send_alert(
-                title=alert_title,
-                target_name=result.target_name,
-                url=result.url,
-                details=result.details,
-                screenshot_path=screenshot_path,
-                detected_links=result.detected_links,
-            )
+            try:
+                await self.notifier.send_alert(
+                    title=alert_title,
+                    target_name=result.target_name,
+                    url=result.url,
+                    details=result.details,
+                    screenshot_path=screenshot_path,
+                    detected_links=result.detected_links,
+                )
+            finally:
+                # Clean up screenshot from disk after sending to save storage
+                if screenshot_path and Path(screenshot_path).is_file():
+                    try:
+                        Path(screenshot_path).unlink(missing_ok=True)
+                        logger.info(f"Cleaned up sent screenshot: {screenshot_path}")
+                    except Exception as err:
+                        logger.warning(f"Failed to delete screenshot: {err}")
 
         self.state[result.target_id] = {
             "name": result.target_name,
@@ -210,6 +221,47 @@ class MonitoringEngine:
 
         return valid_results
 
+    def get_status_report(self) -> str:
+        """Builds a formatted status summary message for Telegram /status command."""
+        lines = ["<b>SWS Watcher: Текущий статус целей</b>\n"]
+        for target in Config.TARGETS:
+            if not target.enabled:
+                continue
+            data = self.state.get(target.id, {})
+            status = data.get("status", "NOT_CHECKED")
+            is_open = data.get("is_open", False)
+            last_checked = data.get("last_checked", "—")
+            if last_checked != "—":
+                try:
+                    dt = datetime.fromisoformat(last_checked)
+                    last_checked = dt.strftime("%H:%M:%S UTC")
+                except Exception:
+                    pass
+
+            status_badge = "OPEN (Прием открыт)" if is_open else "CLOSED (Закрыто)"
+            lines.append(
+                f"<b>{target.name}</b>\n"
+                f"- Статус: <code>{status_badge}</code>\n"
+                f"- Проверено: {last_checked}\n"
+                f"- URL: <code>{target.url}</code>\n"
+            )
+
+        lines.append(f"<i>Интервал проверки: {Config.CHECK_INTERVAL_SECONDS}с. Все сервисы в норме.</i>")
+        return "\n".join(lines)
+
+    async def run_manual_check(self) -> str:
+        """Executes on-demand check and returns formatted results for /check command."""
+        logger.info("Executing manual check requested via Telegram...")
+        results = await self.run_cycle()
+        lines = ["<b>Результаты внеочередной проверки:</b>\n"]
+        for r in results:
+            badge = "OPEN" if r.is_open else "CLOSED"
+            lines.append(
+                f"<b>{r.target_name}</b>: <code>{badge}</code>\n"
+                f"- {r.summary}\n"
+            )
+        return "\n".join(lines)
+
     async def check_heartbeat(self) -> None:
         if Config.HEARTBEAT_INTERVAL_HOURS <= 0:
             return
@@ -224,14 +276,28 @@ class MonitoringEngine:
             await self.notifier.send_heartbeat("\n".join(summary_lines))
             self.last_heartbeat = now
 
+    def _cleanup_old_screenshots(self) -> None:
+        """Removes any leftover screenshots in data directory on startup."""
+        if Config.SCREENSHOTS_DIR.is_dir():
+            for p in Config.SCREENSHOTS_DIR.glob("*.png"):
+                try:
+                    p.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
     async def start(self) -> None:
         self.is_running = True
+        self._cleanup_old_screenshots()
+
         connector = aiohttp.TCPConnector(limit=20, limit_per_host=5, ttl_dns_cache=300)
         self._session = aiohttp.ClientSession(connector=connector)
         self.notifier = TelegramNotifier(session=self._session)
 
         if Config.ENABLE_SCREENSHOTS:
             await self.screenshot_engine.initialize()
+
+        # Start non-blocking Telegram command listener
+        self._poller_task = asyncio.create_task(self.notifier.start_polling(self))
 
         logger.info(f"Engine started. Polling interval: {Config.CHECK_INTERVAL_SECONDS}s")
 
@@ -257,6 +323,13 @@ class MonitoringEngine:
             await self._cleanup()
 
     async def _cleanup(self) -> None:
+        if self._poller_task and not self._poller_task.done():
+            self._poller_task.cancel()
+            try:
+                await self._poller_task
+            except asyncio.CancelledError:
+                pass
+
         await self.screenshot_engine.close()
         await self.notifier.close()
         if self._session and not self._session.closed:

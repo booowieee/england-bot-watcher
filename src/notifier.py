@@ -1,6 +1,7 @@
+import asyncio
 import json
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Callable, Any
 import aiohttp
 from src.config import Config
 from src.logger import logger
@@ -21,6 +22,7 @@ class TelegramNotifier:
         self.api_url = f"https://api.telegram.org/bot{self.token}"
         self._external_session = session
         self._owned_session: Optional[aiohttp.ClientSession] = None
+        self._is_polling = False
 
     @property
     def is_configured(self) -> bool:
@@ -35,6 +37,7 @@ class TelegramNotifier:
         return self._owned_session
 
     async def close(self):
+        self._is_polling = False
         if self._owned_session and not self._owned_session.closed:
             await self._owned_session.close()
 
@@ -93,6 +96,9 @@ class TelegramNotifier:
             f"<i>Интервал проверки: {Config.CHECK_INTERVAL_SECONDS}с.</i>"
         )
         return await self._send_message(message, disable_notification=True)
+
+    async def send_text(self, text: str, reply_markup: Optional[dict] = None) -> bool:
+        return await self._send_message(text, reply_markup=reply_markup)
 
     async def _send_message(
         self,
@@ -177,3 +183,65 @@ class TelegramNotifier:
         except Exception as e:
             logger.error(f"Failed to send Telegram photo: {e}")
             return await self._send_message(caption, reply_markup)
+
+    async def start_polling(self, engine: Any) -> None:
+        """Asynchronous long-polling task for processing incoming Telegram commands."""
+        if not self.is_configured:
+            return
+
+        self._is_polling = True
+        offset = 0
+        logger.info("Telegram command listener started (/status, /check, /help).")
+
+        while self._is_polling:
+            try:
+                url = f"{self.api_url}/getUpdates"
+                params = {"offset": offset, "timeout": 25}
+                async with self._session.get(
+                    url,
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=35)
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for update in data.get("result", []):
+                            offset = update["update_id"] + 1
+                            message = update.get("message", {})
+                            chat_id = str(message.get("chat", {}).get("id", ""))
+
+                            # Only process commands from authorized chat
+                            if chat_id != str(self.chat_id):
+                                continue
+
+                            text = message.get("text", "").strip()
+                            await self._handle_command(text, engine)
+                    else:
+                        await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug(f"Telegram polling exception: {e}")
+                await asyncio.sleep(5)
+
+    async def _handle_command(self, text: str, engine: Any) -> None:
+        cmd = text.split()[0].lower() if text else ""
+
+        if cmd in ("/start", "/help"):
+            msg = (
+                "<b>SWS Watcher Bot</b>\n\n"
+                "Сервис непрерывного мониторинга визовых операторов UK SWS.\n\n"
+                "<b>Доступные команды:</b>\n"
+                "/status — Текущий статус всех отслеживаемых ресурсов\n"
+                "/check — Запустить внеочередную проверку прямо сейчас\n"
+                "/help — Справка по командам"
+            )
+            await self._send_message(msg)
+
+        elif cmd == "/status":
+            report = engine.get_status_report()
+            await self._send_message(report)
+
+        elif cmd == "/check":
+            await self._send_message("Запускаю внеочередную проверку всех ресурсов...")
+            report = await engine.run_manual_check()
+            await self._send_message(report)

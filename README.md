@@ -6,20 +6,21 @@
 ![Telegram](https://img.shields.io/badge/Telegram-Bot_API-26A5E4?logo=telegram&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-Асинхронный сервис мониторинга сайтов визовых операторов UK Seasonal Worker Scheme с мгновенной отправкой уведомлений со скриншотом в Telegram при открытии регистрационных форм.
+Асинхронный сервис мониторинга сайтов визовых операторов UK Seasonal Worker Scheme с мгновенной отправкой уведомлений со скриншотом в Telegram при открытии регистрационных форм и интерактивным управлением через команды.
 
 ---
 
 ## Возможности
 
-- Асинхронный опрос целевых ресурсов через `asyncio` + `aiohttp` с пулом соединений и retry (exponential backoff)
-- Специализированные детекторы для Google Forms, Best Opportunity, HOPS Labour Solutions и Concordia UK
-- Скриншоты через headless Playwright Chromium (singleton, resource blocking)
-- Уведомления в Telegram с inline-кнопкой перехода к анкете, plaintext fallback при ошибках парсинга
-- Уведомления о закрытии формы (`RESOLVED`)
-- Периодический heartbeat-отчет о статусе
-- Атомарная персистенция состояния с автоматическим бэкапом
-- Graceful shutdown по `SIGINT` / `SIGTERM`
+- **Асинхронный мониторинг:** опрос целевых ресурсов через `asyncio` + `aiohttp` с пулом соединений и retry (exponential backoff).
+- **Специализированные детекторы:** для Google Forms, Best Opportunity, HOPS Labour Solutions и Concordia UK.
+- **Скриншоты и защита диска:** рендеринг через headless Playwright Chromium (singleton) с автоматическим удалением файла сразу после отправки в Telegram.
+- **Интерактивное управление через Telegram:**
+  - `/status` — вывод текущего статуса всех целей, ссылок и времени последней проверки.
+  - `/check` — принудительный запуск внеочередной проверки в реальном времени.
+  - `/help` — перечень доступных команд.
+- **Надежная доставка:** inline-кнопки перехода к анкете, plaintext fallback при ошибках парсинга, уведомления о закрытии формы (`RESOLVED`).
+- **Отказоустойчивость:** атомарная персистенция состояния с автоматическим бэкапом, graceful shutdown по `SIGINT` / `SIGTERM`.
 
 ---
 
@@ -41,10 +42,12 @@ graph TD
 
     subgraph Verification ["Скриншотер"]
         Browser["Playwright Chromium (singleton)"]
+        DiskCleaner["Auto Screenshot Cleanup"]
     end
 
-    subgraph Notifications ["Оповещения"]
+    subgraph Notifications ["Оповещения и команды"]
         Telegram["Telegram Bot API"]
+        Poller["Command Poller (/status, /check)"]
         Fallback["Plaintext Fallback"]
     end
 
@@ -55,7 +58,10 @@ graph TD
     Detectors <--> State
     Detectors -->|Изменение статуса| Browser
     Browser --> Telegram
+    Telegram --> DiskCleaner
     Telegram -->|HTTP 400| Fallback
+    Poller <--> Telegram
+    Poller -->|/check| Engine
 ```
 
 Подробное описание компонентов, детекторов и механизмов отказоустойчивости: [docs/architecture.md](./docs/architecture.md).
@@ -70,7 +76,7 @@ graph TD
 | HTTP | aiohttp | Неблокирующий клиент с пулом соединений |
 | Браузер | Playwright Chromium | Headless-скриншоты с блокировкой тяжелых ресурсов |
 | Парсинг | BeautifulSoup4 | Анализ DOM и извлечение ссылок |
-| Оповещения | Telegram Bot API | Доставка алертов с фото и inline-кнопками |
+| Оповещения | Telegram Bot API | Доставка алертов, скриншотов и обработка команд |
 | Контейнеризация | Docker Compose | Изоляция, автоперезапуск, volume-монтирование |
 
 ---
@@ -83,6 +89,16 @@ graph TD
 | Best Opportunity Web | `jobopportunityuk.com` | Новые ссылки на формы, изменение iframe, хэш страницы |
 | HOPS Instructions | `hopslaboursolutions.com/recruitment-instructions` | Ссылки на регистрацию, regex по странам и датам |
 | Concordia UK | `concordia.org.uk` | Изменение ссылок на форму набора |
+
+---
+
+## Команды Telegram
+
+| Команда | Описание |
+|---------|----------|
+| `/status` | Выводит актуальный статус отслеживания по всем 4 ресурсам |
+| `/check` | Принудительно запускает полный цикл проверки и возвращает результат |
+| `/help` | Показывает список доступных команд |
 
 ---
 

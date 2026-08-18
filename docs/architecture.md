@@ -25,10 +25,12 @@ graph TD
     subgraph Verification ["Скриншотер"]
         Browser["Playwright Chromium (singleton)"]
         RouteBlock["Resource Blocker"]
+        DiskCleaner["Auto Screenshot Cleanup"]
     end
 
-    subgraph Notifications ["Оповещения"]
+    subgraph Notifications ["Оповещения и команды"]
         Telegram["Telegram Bot API"]
+        Poller["Command Poller (/status, /check)"]
         Fallback["Plaintext Fallback"]
     end
 
@@ -40,7 +42,10 @@ graph TD
     Detectors -->|Форма открыта / Изменение| Browser
     Browser --> RouteBlock
     Browser --> Telegram
+    Telegram --> DiskCleaner
     Telegram -->|HTTP 400| Fallback
+    Poller <--> Telegram
+    Poller -->|/check| Engine
 ```
 
 ---
@@ -80,19 +85,20 @@ graph TD
 4. **Concordia UK (`ConcordiaDetector`):**
    * Отслеживает появление ссылок на форму сезонного набора для иностранных граждан.
 
-### Движок скриншотов (`src/browser.py`)
+### Движок скриншотов и очистки (`src/browser.py`)
 * Запускает единственный экземпляр headless-браузера Chromium через Playwright при инициализации движка (singleton-паттерн).
 * Для каждого скриншота создается легковесный `BrowserContext`, который закрывается в `finally`-блоке.
-* Блокирует тяжелые ресурсы (изображения, шрифты, медиа, аналитика) через `page.route()` для ускорения загрузки.
-* Использует `--disable-blink-features=AutomationControlled` для обхода простых bot-детекторов.
-* Ожидает `networkidle` с таймаутом 5с после `domcontentloaded` вместо хардкоженного `sleep`.
+* Блокирует тяжелые медиа и трекеры (`media`, `google-analytics`, etc.) через `page.route()`, не блокируя стили и шрифты для корректного рендеринга.
+* **Автоматическая очистка диска:** скриншот удаляется с диска сразу после успешной передачи в Telegram, предотвращая переполнение хранилища хоста.
 
-### Модуль нотификации (`src/notifier.py`)
+### Модуль нотификации и управления (`src/notifier.py`)
 * Переиспользует общий `aiohttp.ClientSession` из движка мониторинга.
-* Формирует HTML-сообщение с описанием события и ссылкой на целевой ресурс.
-* Отправляет скриншот через `sendPhoto` (multipart/form-data) с inline-кнопкой.
+* **Интерактивные команды:**
+  * `/status` — моментальный вывод текущего статуса отслеживаемых ресурсов, времени последней проверки и прямых ссылок.
+  * `/check` — принудительный внеочередной запуск полного цикла проверки с отчетом в реальном времени.
+  * `/help` — перечень доступных команд.
+* Отправляет скриншот через `sendPhoto` (multipart/form-data) с inline-кнопкой перехода.
 * При ошибке парсинга HTML (HTTP 400) автоматически переключается на plaintext fallback.
-* Трансакт текстовых сообщений до лимита Telegram (4096 символов), подписи к фото до 1024 символов.
 * Отправляет уведомления при закрытии формы (`send_resolved`).
 
 ---
@@ -112,6 +118,6 @@ graph TD
 
 * **Retry с backoff:** до 3 попыток с экспоненциальной задержкой при сетевых сбоях.
 * **Semaphore:** ограничение параллельных запросов для предотвращения перегрузки.
-* **Graceful shutdown:** по сигналам `SIGINT`/`SIGTERM` движок завершает текущий цикл, закрывает Playwright, сессию и нотификатор.
+* **Graceful shutdown:** по сигналам `SIGINT`/`SIGTERM` движок завершает текущий цикл, закрывает Playwright, сессию и фоновый опрос команд.
 * **State backup:** автоматическое резервное копирование предотвращает ложные массовые алерты при повреждении файла состояния.
 * **CancelledError re-raise:** корректная обработка отмены задач в asyncio без подавления сигналов.
