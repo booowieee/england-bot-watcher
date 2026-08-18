@@ -1,18 +1,12 @@
-"""
-Specialized detector for HOPS Labour Solutions recruitment instructions and flash registration windows.
-"""
 import re
 from typing import Dict, Any, Optional, List
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from src.detectors.base import BaseDetector
 from src.models import CheckResult
-from src.logger import logger
 
 
 class HopsDetector(BaseDetector):
-    """Monitors HOPS recruitment instructions for country updates, flash windows, and registration links."""
-
     KEYWORD_TRIGGERS = [
         r"\bmoldova\b",
         r"\bмолдова\b",
@@ -45,7 +39,6 @@ class HopsDetector(BaseDetector):
         soup = BeautifulSoup(html, "html.parser")
         html_lower = html.lower()
 
-        # 1. Extract all application / external form links
         found_form_links: List[str] = []
         for a_tag in soup.find_all("a", href=True):
             href = a_tag["href"].strip()
@@ -54,55 +47,43 @@ class HopsDetector(BaseDetector):
                 if full_url not in found_form_links:
                     found_form_links.append(full_url)
 
-        # 2. Check for high-priority keyword triggers
         matched_keywords: List[str] = []
         for pattern in self.KEYWORD_TRIGGERS:
             if re.search(pattern, html_lower, re.IGNORECASE):
                 matched_keywords.append(pattern.replace(r"\b", ""))
 
-        # 3. Hash calculation
         text_content = soup.get_text(separator=" ", strip=True)
         current_hash = self.calculate_hash(text_content)
 
         prev_hash = previous_state.get("hash") if previous_state else None
         prev_links = previous_state.get("links", []) if previous_state else []
 
-        # 4. Determine changes
         new_links = [link for link in found_form_links if link not in prev_links]
         hash_changed = (prev_hash is not None and prev_hash != current_hash)
 
-        # Alert conditions:
-        # - New registration form link appeared
-        # - Specific mention of Moldova or new registration announcement appeared
         is_alert = False
         alert_reasons = []
 
         if new_links:
             is_alert = True
-            alert_reasons.append(f"Обнаружены новые ссылки на регистрацию: {len(new_links)} шт.")
+            alert_reasons.append(f"Обнаружены новые ссылки на регистрацию ({len(new_links)} шт.)")
 
         if "moldova" in matched_keywords or "молдова" in matched_keywords:
             if not previous_state or "moldova" not in previous_state.get("matched_keywords", []):
                 is_alert = True
-                alert_reasons.append("⚡ Обнаружено упоминание Молдовы в правилах набора!")
+                alert_reasons.append("Обнаружено упоминание Молдовы в правилах набора")
 
         if hash_changed and not is_alert:
-            # Text was updated without new form links
-            summary = "Текст инструкций HOPS обновлен."
-            details = (
-                "ℹ️ <b>На странице HOPS изменился контент.</b>\n"
-                "• Хэш страницы обновился. Новых прямых ссылок пока нет."
-            )
+            summary = "Текст инструкций HOPS обновлен"
+            details = "На странице изменился контент. Новых регистрационных ссылок не найдено."
         elif is_alert:
-            summary = "🔥 ВНИМАНИЕ: Изменение в HOPS Labour Solutions!"
-            details = (
-                f"🚨 <b>{summary}</b>\n"
-                f"• {chr(10).join(alert_reasons)}\n"
-                f"• Ключевые слова: {', '.join(matched_keywords)}"
-            )
+            summary = "Обновление в инструкциях HOPS"
+            details = "\n".join([f"- {r}" for r in alert_reasons])
+            if matched_keywords:
+                details += f"\n- Ключевые слова: {', '.join(matched_keywords)}"
         else:
-            summary = "Страница HOPS без критических изменений."
-            details = "Инструкции HOPS на прежнем уровне. Новых регистрационных ссылок не найдено."
+            summary = "Страница HOPS без изменений"
+            details = "Новых регистрационных ссылок не найдено."
 
         return CheckResult(
             target_id=self.target.id,

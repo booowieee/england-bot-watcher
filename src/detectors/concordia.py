@@ -1,6 +1,3 @@
-"""
-Detector for Concordia UK official charity website (concordia.org.uk).
-"""
 from typing import Dict, Any, Optional, List
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
@@ -9,16 +6,6 @@ from src.models import CheckResult
 
 
 class ConcordiaDetector(BaseDetector):
-    """Monitors concordia.org.uk for seasonal worker updates and scheme notifications."""
-
-    KEYWORD_TRIGGERS = [
-        "seasonal worker",
-        "apply",
-        "recruitment",
-        "intake",
-        "application form",
-    ]
-
     async def analyze(
         self,
         html: str,
@@ -28,7 +15,6 @@ class ConcordiaDetector(BaseDetector):
     ) -> CheckResult:
         soup = BeautifulSoup(html, "html.parser")
 
-        # 1. Search for seasonal worker scheme links
         detected_links: List[str] = []
         for a_tag in soup.find_all("a", href=True):
             href = a_tag["href"].strip()
@@ -37,7 +23,6 @@ class ConcordiaDetector(BaseDetector):
                 if full_url not in detected_links:
                     detected_links.append(full_url)
 
-        # 2. Content Hash
         text_content = soup.get_text(separator=" ", strip=True)
         current_hash = self.calculate_hash(text_content)
 
@@ -50,16 +35,13 @@ class ConcordiaDetector(BaseDetector):
         is_alert = bool(new_links) and any("apply" in l.lower() or "form" in l.lower() for l in new_links)
 
         if is_alert:
-            summary = "🔥 ВНИМАНИЕ: Новая страница подачи на Concordia UK!"
-            details = (
-                "🚨 <b>На сайте concordia.org.uk обнаружены новые ссылки для соискателей!</b>\n"
-                f"• Новых ссылок: {len(new_links)}"
-            )
+            summary = "Обновление на сайте Concordia UK"
+            details = f"Обнаружены новые ссылки для подачи заявок: {len(new_links)} шт."
         elif hash_changed:
-            summary = "Обновление контента на сайте Concordia UK."
-            details = "ℹ️ Текст страницы Concordia изменился."
+            summary = "Текст сайта Concordia UK изменился"
+            details = "Контент страницы обновлен."
         else:
-            summary = "Сайт Concordia UK без изменений."
+            summary = "Сайт Concordia UK без изменений"
             details = "Новых регистрационных форм не зафиксировано."
 
         return CheckResult(

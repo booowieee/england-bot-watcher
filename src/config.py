@@ -1,38 +1,28 @@
-"""
-Configuration loader and settings manager for SWS Monitor Bot.
-"""
 import os
 from pathlib import Path
 from typing import List
 from dotenv import load_dotenv
 from src.models import TargetConfig, TargetType
 
-# Load .env file from the bot root directory
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 
 class Config:
-    """Application settings loaded from environment variables."""
-    # Telegram Credentials
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-    # Intervals & Timers
     CHECK_INTERVAL_SECONDS: int = int(os.getenv("CHECK_INTERVAL_SECONDS", "45"))
     HEARTBEAT_INTERVAL_HOURS: int = int(os.getenv("HEARTBEAT_INTERVAL_HOURS", "12"))
 
-    # Features
     ENABLE_SCREENSHOTS: bool = os.getenv("ENABLE_SCREENSHOTS", "true").lower() in ("true", "1", "yes")
     DEBUG_MODE: bool = os.getenv("DEBUG_MODE", "false").lower() in ("true", "1", "yes")
 
-    # Storage Paths
     DATA_DIR: Path = BASE_DIR / "data"
     STATE_FILE: Path = DATA_DIR / "monitor_state.json"
     SCREENSHOTS_DIR: Path = DATA_DIR / "screenshots"
     LOGS_DIR: Path = BASE_DIR / "logs"
 
-    # Default HTTP Headers to bypass generic WAF/anti-bot filters
     DEFAULT_HEADERS: dict = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -45,32 +35,31 @@ class Config:
         "Pragma": "no-cache",
     }
 
-    # Monitoring Targets List
     TARGETS: List[TargetConfig] = [
         TargetConfig(
             id="best_opp_form",
-            name="Best Opportunity Google Form (Direct)",
+            name="Best Opportunity Google Form",
             url="https://forms.gle/kkdrh8aNPQNHQkCk8",
             target_type=TargetType.GOOGLE_FORM,
             enabled=True,
         ),
         TargetConfig(
             id="best_opp_web",
-            name="Best Opportunity Website (jobopportunityuk.com)",
+            name="Best Opportunity Website",
             url="https://www.jobopportunityuk.com/",
             target_type=TargetType.BEST_OPP_WEB,
             enabled=True,
         ),
         TargetConfig(
             id="hops_instructions",
-            name="HOPS Labour Solutions (Recruitment Instructions)",
+            name="HOPS Labour Solutions Instructions",
             url="https://www.hopslaboursolutions.com/recruitment-instructions",
             target_type=TargetType.HOPS_INSTRUCTIONS,
             enabled=True,
         ),
         TargetConfig(
             id="concordia_web",
-            name="Concordia UK (Seasonal Worker Portal)",
+            name="Concordia UK Portal",
             url="https://www.concordia.org.uk/",
             target_type=TargetType.CONCORDIA_WEB,
             enabled=True,
@@ -78,7 +67,6 @@ class Config:
     ]
 
 
-# Ensure persistent directories exist
 Config.DATA_DIR.mkdir(parents=True, exist_ok=True)
 Config.SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 Config.LOGS_DIR.mkdir(parents=True, exist_ok=True)

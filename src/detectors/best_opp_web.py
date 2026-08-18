@@ -1,6 +1,3 @@
-"""
-Detector for the Best Opportunity official agency website (jobopportunityuk.com).
-"""
 from typing import Dict, Any, Optional, List
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
@@ -9,8 +6,6 @@ from src.models import CheckResult
 
 
 class BestOpportunityWebDetector(BaseDetector):
-    """Monitors jobopportunityuk.com for new form embeds, application announcements, and links."""
-
     FORM_PATTERNS = [
         "forms.gle",
         "docs.google.com/forms",
@@ -28,7 +23,6 @@ class BestOpportunityWebDetector(BaseDetector):
     ) -> CheckResult:
         soup = BeautifulSoup(html, "html.parser")
 
-        # 1. Search for application links & iframe embeds
         detected_links: List[str] = []
         for a_tag in soup.find_all("a", href=True):
             href = a_tag["href"].strip()
@@ -44,7 +38,6 @@ class BestOpportunityWebDetector(BaseDetector):
                 if full_url not in detected_links:
                     detected_links.append(full_url)
 
-        # 2. Content Hash
         text_content = soup.get_text(separator=" ", strip=True)
         current_hash = self.calculate_hash(text_content)
 
@@ -57,17 +50,17 @@ class BestOpportunityWebDetector(BaseDetector):
         is_alert = bool(new_links) or (hash_changed and any("form" in l for l in detected_links))
 
         if is_alert:
-            summary = "🔥 ВНИМАНИЕ: Обновление на сайте Best Opportunity!"
+            summary = "Обновление на сайте Best Opportunity"
             details = (
-                "🚨 <b>На сайте jobopportunityuk.com обнаружены новые ссылки / формы!</b>\n"
-                f"• Новых ссылок найдено: {len(new_links)}\n"
-                f"• Всего ссылок: {len(detected_links)}"
+                f"На сайте обнаружены новые ссылки или формы.\n"
+                f"- Новых ссылок: {len(new_links)}\n"
+                f"- Всего ссылок: {len(detected_links)}"
             )
         elif hash_changed:
-            summary = "Текст сайта Best Opportunity изменился."
-            details = "ℹ️ Контент на главной странице обновлен."
+            summary = "Текст сайта Best Opportunity изменился"
+            details = "Контент на главной странице обновлен."
         else:
-            summary = "Сайт Best Opportunity без изменений."
+            summary = "Сайт Best Opportunity без изменений"
             details = "Новых регистрационных форм на сайте не обнаружено."
 
         return CheckResult(
