@@ -67,6 +67,8 @@ class Config:
     ]
 
 
-Config.DATA_DIR.mkdir(parents=True, exist_ok=True)
-Config.SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
-Config.LOGS_DIR.mkdir(parents=True, exist_ok=True)
+for directory in (Config.DATA_DIR, Config.SCREENSHOTS_DIR, Config.LOGS_DIR):
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass

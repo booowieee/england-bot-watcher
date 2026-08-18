@@ -42,9 +42,4 @@ COPY README.md LICENSE ./
 
 RUN mkdir -p /app/data/screenshots /app/logs
 
-RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app /ms-playwright
-
-USER appuser
-
 CMD ["python", "-m", "src.main"]
