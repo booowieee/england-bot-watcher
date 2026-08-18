@@ -33,6 +33,8 @@ class BestOpportunityWebDetector(BaseDetector):
 
         for iframe in soup.find_all("iframe", src=True):
             src = iframe["src"].strip()
+            if not src or src.startswith("#"):
+                continue
             full_url = urljoin(final_url, src)
             if any(p in full_url.lower() for p in self.FORM_PATTERNS):
                 if full_url not in detected_links:

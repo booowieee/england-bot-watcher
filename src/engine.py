@@ -29,6 +29,7 @@ class MonitoringEngine:
         self.state: Dict[str, Any] = self._load_state()
         self.last_heartbeat: datetime = datetime.now(UTC)
         self.is_running: bool = False
+        self._stop_event: asyncio.Event | None = None
         self._session: aiohttp.ClientSession | None = None
         self._semaphore = asyncio.Semaphore(CONCURRENT_LIMIT)
         self.screenshot_engine = ScreenshotEngine()
@@ -79,6 +80,12 @@ class MonitoringEngine:
             temp_file.replace(self.state_file)
         except Exception as e:
             logger.error(f"Failed to persist state: {e}")
+
+    def _get_target_type(self, target_id: str) -> TargetType | None:
+        for target in Config.TARGETS:
+            if target.id == target_id:
+                return target.target_type
+        return None
 
     async def _fetch_with_retry(
         self,
@@ -154,13 +161,17 @@ class MonitoringEngine:
     async def process_check_result(self, result: CheckResult, is_baseline: bool = False) -> None:
         target_state = self.state.get(result.target_id, {})
         prev_status = target_state.get("status")
+        target_type = self._get_target_type(result.target_id)
 
-        # Never trigger alerts during baseline startup unless Google Form is actively OPEN
+        # Never trigger alerts during baseline startup (except if Google Form is actively OPEN)
         if is_baseline:
-            result.is_alert = (result.target_id == "best_opp_form" and result.current_state == TargetStatus.OPEN.value)
+            result.is_alert = (
+                target_type == TargetType.GOOGLE_FORM
+                and result.current_state == TargetStatus.OPEN.value
+            )
         else:
-            # Handle form open/close transitions
-            if result.target_id == "best_opp_form":
+            # Handle form open/close transitions for Google Forms targets
+            if target_type == TargetType.GOOGLE_FORM:
                 if result.current_state == TargetStatus.OPEN.value and prev_status == TargetStatus.CLOSED.value:
                     result.is_alert = True
                 elif result.current_state == TargetStatus.CLOSED.value and prev_status == TargetStatus.OPEN.value:
@@ -183,14 +194,12 @@ class MonitoringEngine:
                     detected_links=result.detected_links,
                 )
             finally:
-                # Always clean up screenshots from disk immediately after sending
                 for path in screenshots:
                     try:
                         Path(path).unlink(missing_ok=True)
                     except Exception:
                         pass
 
-        # Persist updated state
         self.state[result.target_id] = {
             "name": result.target_name,
             "url": result.url,
@@ -273,7 +282,7 @@ class MonitoringEngine:
                         pass
 
         await self.notifier.send_heartbeat(
-            "<b>Ручная проверка завершена.</b>\nВсе 4 ресурса проверены, актуальные снимки страниц отправлены выше."
+            "<b>Ручная проверка завершена.</b>\nВсе ресурсы проверены, актуальные снимки страниц отправлены выше."
         )
 
     async def check_heartbeat(self) -> None:
@@ -298,13 +307,24 @@ class MonitoringEngine:
                 except Exception:
                     pass
 
+    async def _interruptible_sleep(self, seconds: float) -> None:
+        """Sleep that can be interrupted immediately by stop_event."""
+        try:
+            await asyncio.wait_for(self._stop_event.wait(), timeout=seconds)
+        except asyncio.TimeoutError:
+            pass
+
     async def start(self) -> None:
         self.is_running = True
+        self._stop_event = asyncio.Event()
         self._cleanup_old_screenshots()
 
         connector = aiohttp.TCPConnector(limit=20, limit_per_host=5, ttl_dns_cache=300)
         self._session = aiohttp.ClientSession(connector=connector)
         self.notifier = TelegramNotifier(session=self._session)
+
+        if not self.notifier.is_configured:
+            logger.warning("Telegram credentials missing. Bot will monitor but cannot send notifications.")
 
         if Config.ENABLE_SCREENSHOTS:
             await self.screenshot_engine.initialize()
@@ -320,7 +340,9 @@ class MonitoringEngine:
 
             while self.is_running:
                 try:
-                    await asyncio.sleep(Config.CHECK_INTERVAL_SECONDS)
+                    await self._interruptible_sleep(Config.CHECK_INTERVAL_SECONDS)
+                    if not self.is_running:
+                        break
                     logger.debug("Executing inspection cycle...")
                     await self.run_cycle(is_baseline=False)
                     await self.check_heartbeat()
@@ -329,7 +351,7 @@ class MonitoringEngine:
                     raise
                 except Exception as e:
                     logger.error(f"Cycle error: {e}", exc_info=True)
-                    await asyncio.sleep(10)
+                    await self._interruptible_sleep(10)
         finally:
             await self._cleanup()
 
@@ -349,4 +371,6 @@ class MonitoringEngine:
 
     def stop(self) -> None:
         self.is_running = False
+        if self._stop_event:
+            self._stop_event.set()
         logger.info("Engine stopping...")

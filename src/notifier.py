@@ -77,7 +77,6 @@ class TelegramNotifier:
         if not valid_screenshots:
             return await self._send_message(caption, inline_keyboard)
 
-        # Send screenshots sequentially in structured blocks
         total = len(valid_screenshots)
         success = True
         for i, photo_path in enumerate(valid_screenshots):
@@ -173,8 +172,8 @@ class TelegramNotifier:
             if reply_markup:
                 data.add_field("reply_markup", json.dumps(reply_markup))
 
-            with open(photo_path, "rb") as f:
-                photo_bytes = f.read()
+            # Read file in a thread to avoid blocking the event loop
+            photo_bytes = await asyncio.to_thread(Path(photo_path).read_bytes)
 
             data.add_field(
                 "photo",
@@ -198,6 +197,7 @@ class TelegramNotifier:
     async def start_polling(self, engine: Any) -> None:
         """Asynchronous long-polling task for processing incoming Telegram commands."""
         if not self.is_configured:
+            logger.warning("Telegram not configured, command listener disabled.")
             return
 
         self._is_polling = True
@@ -217,15 +217,19 @@ class TelegramNotifier:
                         data = await resp.json()
                         for update in data.get("result", []):
                             offset = update["update_id"] + 1
-                            message = update.get("message", {})
-                            chat_id = str(message.get("chat", {}).get("id", ""))
 
-                            # Only process commands from authorized chat
+                            # Only process direct messages, skip edited_message and callbacks
+                            message = update.get("message")
+                            if not message:
+                                continue
+
+                            chat_id = str(message.get("chat", {}).get("id", ""))
                             if chat_id != str(self.chat_id):
                                 continue
 
                             text = message.get("text", "").strip()
-                            await self._handle_command(text, engine)
+                            if text.startswith("/"):
+                                await self._handle_command(text, engine)
                     else:
                         await asyncio.sleep(5)
             except asyncio.CancelledError:
@@ -242,8 +246,8 @@ class TelegramNotifier:
                 "<b>SWS Watcher Bot</b>\n\n"
                 "Сервис непрерывного мониторинга визовых операторов UK SWS.\n\n"
                 "<b>Доступные команды:</b>\n"
-                "/status — Текстовый отчет о статусе всех 4 ресурсов\n"
-                "/check — Полная визуальная проверка со скриншотами прямо сейчас\n"
+                "/status — Текстовый отчет о статусе всех ресурсов\n"
+                "/check — Полная визуальная проверка со скриншотами\n"
                 "/help — Справка по командам"
             )
             await self._send_message(msg)

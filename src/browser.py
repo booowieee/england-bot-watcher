@@ -87,12 +87,10 @@ class ScreenshotEngine:
             except Exception:
                 pass
 
-            # Calculate total page height
             total_height = await page.evaluate(
                 "() => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, 900)"
             )
 
-            # If page is standard height (<= 1400px), capture single full screenshot
             if total_height <= 1400:
                 output_path = Config.SCREENSHOTS_DIR / f"{target_id}_{timestamp_str}.png"
                 await page.screenshot(
@@ -103,7 +101,6 @@ class ScreenshotEngine:
                 )
                 generated_paths.append(str(output_path))
             else:
-                # Split entire scroll length into readable viewport slices with 100px overlap
                 step = viewport_height - 100
                 num_slices = min(max_slices, math.ceil(total_height / step))
 
@@ -136,10 +133,6 @@ class ScreenshotEngine:
         finally:
             if context:
                 await context.close()
-
-    async def capture(self, url: str, target_id: str, timeout_ms: int = 30000) -> Optional[str]:
-        chunks = await self.capture_chunks(url, target_id, max_slices=1, timeout_ms=timeout_ms)
-        return chunks[0] if chunks else None
 
 
 async def capture_screenshots(url: str, target_id: str) -> List[str]:
