@@ -10,6 +10,7 @@ from src.logger import logger
 from src.models import TargetConfig, TargetType, CheckResult, TargetStatus
 from src.browser import ScreenshotEngine
 from src.notifier import TelegramNotifier
+from src.archiver import WaybackArchiver
 from src.detectors import (
     BaseDetector,
     GoogleFormsDetector,
@@ -28,11 +29,13 @@ class MonitoringEngine:
         self.state_file = Config.STATE_FILE
         self.state: Dict[str, Any] = self._load_state()
         self.last_heartbeat: datetime = datetime.now(UTC)
+        self.last_wayback_archive: datetime = datetime.now(UTC)
         self.is_running: bool = False
         self._stop_event: asyncio.Event | None = None
         self._session: aiohttp.ClientSession | None = None
         self._semaphore = asyncio.Semaphore(CONCURRENT_LIMIT)
         self.screenshot_engine = ScreenshotEngine()
+        self.archiver = WaybackArchiver()
         self.notifier: TelegramNotifier | None = None
         self._poller_task: asyncio.Task | None = None
 
@@ -267,7 +270,6 @@ class MonitoringEngine:
 
             try:
                 if chat_id:
-                    # Deliver specifically to the requesting user
                     details = f"<b>Статус:</b> <code>{res.current_state}</code>\n{res.summary}"
                     title = f"Отчет проверки: {target.name}"
                     inline_keyboard = {"inline_keyboard": [[{"text": "Открыть анкету", "url": res.url}]]}
@@ -302,6 +304,37 @@ class MonitoringEngine:
             await self.notifier._send_message_to(chat_id, completion_msg)
         else:
             await self.notifier.send_heartbeat(completion_msg)
+
+    async def run_manual_archive(self, chat_id: str | None = None) -> None:
+        """Executes manual archival of all targets to Wayback Machine and reports results."""
+        target_cid = chat_id or self.notifier.admin_chat_id
+        await self.notifier._send_message_to(target_cid, "⏳ Отправляю страницы на архивацию в Wayback Machine (web.archive.org)...")
+
+        results = await self.archiver.archive_targets(Config.TARGETS, self._session)
+        lines = ["<b>Результаты архивации в Wayback Machine:</b>\n"]
+        for name, snap_url in results.items():
+            if snap_url:
+                lines.append(f"• <b>{name}</b>:\n  <code>{snap_url}</code>\n")
+            else:
+                lines.append(f"• <b>{name}</b>: <i>Ошибка отправки</i>\n")
+
+        lines.append("<i>Снимки сохранены в глобальном веб-архиве.</i>")
+        await self.notifier._send_message_to(target_cid, "\n".join(lines))
+
+    async def check_wayback_archival(self) -> None:
+        """Scheduled daily/twice-daily archival task."""
+        if not Config.ENABLE_WAYBACK_ARCHIVE or Config.WAYBACK_INTERVAL_HOURS <= 0:
+            return
+
+        now = datetime.now(UTC)
+        if now - self.last_wayback_archive >= timedelta(hours=Config.WAYBACK_INTERVAL_HOURS):
+            logger.info("Executing scheduled Wayback Machine archival for all targets...")
+            try:
+                await self.archiver.archive_targets(Config.TARGETS, self._session)
+                self.last_wayback_archive = now
+                logger.info("Scheduled Wayback Machine archival completed.")
+            except Exception as e:
+                logger.error(f"Error during scheduled Wayback archival: {e}")
 
     async def check_heartbeat(self) -> None:
         if Config.HEARTBEAT_INTERVAL_HOURS <= 0:
@@ -364,6 +397,7 @@ class MonitoringEngine:
                     logger.debug("Executing inspection cycle...")
                     await self.run_cycle(is_baseline=False)
                     await self.check_heartbeat()
+                    await self.check_wayback_archival()
                 except asyncio.CancelledError:
                     logger.info("Engine received cancellation signal.")
                     raise

@@ -19,6 +19,9 @@ class Config:
     ENABLE_SCREENSHOTS: bool = os.getenv("ENABLE_SCREENSHOTS", "true").lower() in ("true", "1", "yes")
     DEBUG_MODE: bool = os.getenv("DEBUG_MODE", "false").lower() in ("true", "1", "yes")
 
+    ENABLE_WAYBACK_ARCHIVE: bool = os.getenv("ENABLE_WAYBACK_ARCHIVE", "true").lower() in ("true", "1", "yes")
+    WAYBACK_INTERVAL_HOURS: int = int(os.getenv("WAYBACK_INTERVAL_HOURS", "12"))
+
     DATA_DIR: Path = BASE_DIR / "data"
     STATE_FILE: Path = DATA_DIR / "monitor_state.json"
     WHITELIST_FILE: Path = DATA_DIR / "whitelist.json"

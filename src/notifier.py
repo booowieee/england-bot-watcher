@@ -405,6 +405,9 @@ class TelegramNotifier:
             await self._send_message_to(chat_id, "Запускаю внеочередную проверку всех ресурсов со скриншотами...")
             await engine.run_manual_visual_check_for(chat_id)
 
+        elif cmd == "/archive":
+            await engine.run_manual_archive(chat_id)
+
         elif cmd in ("/users", "/whitelist") and is_adm:
             report = self.whitelist.get_users_report()
             await self._send_message_to(chat_id, report)
