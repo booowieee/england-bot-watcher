@@ -1,11 +1,5 @@
-# ==============================================================================
-# Production Dockerfile for SWS Telegram Monitor Bot
-# Multi-stage lightweight build with Playwright Chromium headless engine
-# ==============================================================================
-
 FROM python:3.12-slim-bookworm
 
-# Установка системных зависимостей для Playwright Chromium
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -37,25 +31,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Установка Python зависимостей
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Установка только Chromium браузера для Playwright
 RUN playwright install chromium
 
-# Копирование исходного кода проекта
 COPY src/ ./src/
-COPY README.md .
+COPY docs/ ./docs/
+COPY README.md LICENSE ./
 
-# Создание директории для персистентных данных
 RUN mkdir -p /app/data/screenshots /app/logs
 
-# Создание непривилегированного пользователя для безопасности
 RUN useradd -m -u 1000 appuser && \
     chown -R appuser:appuser /app /ms-playwright
 
 USER appuser
 
-# Запуск монитора
 CMD ["python", "-m", "src.main"]

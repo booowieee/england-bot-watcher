@@ -1,28 +1,10 @@
-"""
-Structured logging module for SWS Monitor Bot with Windows UTF-8 console safety.
-"""
-import io
 import logging
 import sys
 from logging.handlers import RotatingFileHandler
 from src.config import Config
 
-# Ensure stdout and stderr use UTF-8 on Windows
-if hasattr(sys.stdout, "reconfigure"):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-
-if hasattr(sys.stderr, "reconfigure"):
-    try:
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-
 
 def setup_logger(name: str = "sws_monitor") -> logging.Logger:
-    """Configures and returns a structured logger with console and rotating file handlers."""
     logger = logging.getLogger(name)
     level = logging.DEBUG if Config.DEBUG_MODE else logging.INFO
     logger.setLevel(level)
@@ -30,18 +12,28 @@ def setup_logger(name: str = "sws_monitor") -> logging.Logger:
     if logger.handlers:
         return logger
 
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+    if hasattr(sys.stderr, "reconfigure"):
+        try:
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     log_format = logging.Formatter(
         "[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-    # Console Handler with UTF-8 encoding
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(level)
     console_handler.setFormatter(log_format)
     logger.addHandler(console_handler)
 
-    # File Handler (rotating: max 10MB per file, up to 5 backups)
     log_file = Config.LOGS_DIR / "monitor.log"
     file_handler = RotatingFileHandler(
         log_file,

@@ -1,6 +1,3 @@
-"""
-Detectors package initialization.
-"""
 from src.detectors.base import BaseDetector
 from src.detectors.google_forms import GoogleFormsDetector
 from src.detectors.hops_detector import HopsDetector

@@ -1,10 +1,7 @@
-"""
-Data models and type definitions for SWS Monitor Bot.
-"""
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, UTC
 from enum import Enum
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 
 
 class TargetType(str, Enum):
@@ -22,7 +19,6 @@ class FormStatus(str, Enum):
 
 @dataclass
 class CheckResult:
-    """Result of a single target inspection."""
     target_id: str
     target_name: str
     url: str
@@ -35,13 +31,12 @@ class CheckResult:
     detected_links: List[str] = field(default_factory=list)
     html_hash: str = ""
     screenshot_path: Optional[str] = None
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     error: Optional[str] = None
 
 
 @dataclass
 class TargetConfig:
-    """Configuration for an individual monitoring target."""
     id: str
     name: str
     url: str

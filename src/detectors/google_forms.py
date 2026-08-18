@@ -1,4 +1,3 @@
-import re
 from typing import Dict, Any, Optional
 from bs4 import BeautifulSoup
 from src.detectors.base import BaseDetector
