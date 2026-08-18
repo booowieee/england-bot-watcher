@@ -11,10 +11,11 @@ class TargetType(str, Enum):
     CONCORDIA_WEB = "CONCORDIA_WEB"
 
 
-class FormStatus(str, Enum):
+class TargetStatus(str, Enum):
     OPEN = "OPEN"
     CLOSED = "CLOSED"
-    UNKNOWN = "UNKNOWN"
+    WATCHING = "WATCHING"
+    ERROR = "ERROR"
 
 
 @dataclass
@@ -22,7 +23,7 @@ class CheckResult:
     target_id: str
     target_name: str
     url: str
-    is_open: bool
+    is_alert: bool
     status_changed: bool
     previous_state: Optional[str]
     current_state: str
@@ -30,7 +31,7 @@ class CheckResult:
     details: str
     detected_links: List[str] = field(default_factory=list)
     html_hash: str = ""
-    screenshot_path: Optional[str] = None
+    screenshots: List[str] = field(default_factory=list)
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     error: Optional[str] = None
 

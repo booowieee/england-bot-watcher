@@ -1,7 +1,7 @@
 from typing import Dict, Any, Optional
 from bs4 import BeautifulSoup
 from src.detectors.base import BaseDetector
-from src.models import CheckResult, FormStatus
+from src.models import CheckResult, TargetStatus
 
 
 class GoogleFormsDetector(BaseDetector):
@@ -38,21 +38,18 @@ class GoogleFormsDetector(BaseDetector):
         )
 
         if is_closed_by_url or (is_closed_by_text and not has_input_fields):
-            current_status = FormStatus.CLOSED
+            current_status = TargetStatus.CLOSED
         elif has_input_fields or ("viewform" in url_lower and not is_closed_by_text):
-            current_status = FormStatus.OPEN
+            current_status = TargetStatus.OPEN
         else:
-            current_status = FormStatus.UNKNOWN
+            current_status = TargetStatus.WATCHING
 
-        is_open = (current_status == FormStatus.OPEN)
         prev_status_str = previous_state.get("status") if previous_state else None
-
-        status_changed = False
-        if prev_status_str and prev_status_str != current_status.value:
-            status_changed = True
+        status_changed = bool(prev_status_str and prev_status_str != current_status.value)
+        is_alert = (current_status == TargetStatus.OPEN and prev_status_str != TargetStatus.OPEN.value)
 
         summary = f"Статус формы: {current_status.value}"
-        if is_open:
+        if current_status == TargetStatus.OPEN:
             details = (
                 "<b>Форма открыта и принимает заявки.</b>\n"
                 "- Обнаружен редирект на /viewform.\n"
@@ -70,7 +67,7 @@ class GoogleFormsDetector(BaseDetector):
             target_id=self.target.id,
             target_name=self.target.name,
             url=final_url,
-            is_open=is_open,
+            is_alert=is_alert,
             status_changed=status_changed,
             previous_state=prev_status_str,
             current_state=current_status.value,

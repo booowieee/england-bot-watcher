@@ -3,7 +3,7 @@ from typing import Dict, Any, Optional, List
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from src.detectors.base import BaseDetector
-from src.models import CheckResult
+from src.models import CheckResult, TargetStatus
 
 
 class HopsDetector(BaseDetector):
@@ -58,9 +58,11 @@ class HopsDetector(BaseDetector):
         is_initial_run = not previous_state
         prev_hash = previous_state.get("hash") if previous_state else None
         prev_links = previous_state.get("links", []) if previous_state else []
+        prev_keywords = previous_state.get("matched_keywords", []) if previous_state else []
 
         new_links = [link for link in found_form_links if link not in prev_links] if not is_initial_run else []
-        hash_changed = (prev_hash is not None and prev_hash != current_hash)
+        new_keywords = [kw for kw in matched_keywords if kw not in prev_keywords] if not is_initial_run else []
+        hash_changed = bool(prev_hash is not None and prev_hash != current_hash)
 
         is_alert = False
         alert_reasons = []
@@ -69,31 +71,30 @@ class HopsDetector(BaseDetector):
             is_alert = True
             alert_reasons.append(f"Обнаружены новые ссылки на регистрацию ({len(new_links)} шт.)")
 
-        if not is_initial_run and ("moldova" in matched_keywords or "молдова" in matched_keywords):
-            if "moldova" not in previous_state.get("matched_keywords", []):
-                is_alert = True
-                alert_reasons.append("Обнаружено упоминание Молдовы в правилах набора")
+        if new_keywords:
+            is_alert = True
+            alert_reasons.append(f"Новые ключевые слова: {', '.join(new_keywords)}")
 
         if hash_changed and not is_alert:
             summary = "Текст инструкций HOPS обновлен"
-            details = "На странице изменился контент. Новых регистрационных ссылок не найдено."
+            details = "На странице изменился контент. Новых регистрационных ссылок не обнаружено."
         elif is_alert:
             summary = "Обновление в инструкциях HOPS"
             details = "\n".join([f"- {r}" for r in alert_reasons])
             if matched_keywords:
-                details += f"\n- Ключевые слова: {', '.join(matched_keywords)}"
+                details += f"\n- Все совпадения: {', '.join(matched_keywords)}"
         else:
-            summary = "Страница HOPS без изменений"
-            details = "Новых регистрационных ссылок не найдено."
+            summary = "Страница HOPS под наблюдением (без изменений)"
+            details = "Новых регистрационных ссылок не обнаружено."
 
         return CheckResult(
             target_id=self.target.id,
             target_name=self.target.name,
             url=final_url,
-            is_open=is_alert,
+            is_alert=is_alert,
             status_changed=(hash_changed or bool(new_links)),
             previous_state=prev_hash,
-            current_state=current_hash,
+            current_state=TargetStatus.WATCHING.value,
             summary=summary,
             details=details,
             detected_links=found_form_links,

@@ -2,7 +2,7 @@ from typing import Dict, Any, Optional, List
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from src.detectors.base import BaseDetector
-from src.models import CheckResult
+from src.models import CheckResult, TargetStatus
 
 
 class BestOpportunityWebDetector(BaseDetector):
@@ -46,32 +46,31 @@ class BestOpportunityWebDetector(BaseDetector):
         prev_links = previous_state.get("links", []) if previous_state else []
 
         new_links = [l for l in detected_links if l not in prev_links] if not is_initial_run else []
-        hash_changed = (prev_hash is not None and prev_hash != current_hash)
+        hash_changed = bool(prev_hash is not None and prev_hash != current_hash)
 
         is_alert = bool(new_links)
 
         if is_alert:
             summary = "Обновление на сайте Best Opportunity"
             details = (
-                f"На сайте обнаружены новые ссылки или формы.\n"
-                f"- Новых ссылок: {len(new_links)}\n"
+                f"На сайте обнаружены новые ссылки на регистрацию ({len(new_links)} шт.).\n"
                 f"- Всего ссылок: {len(detected_links)}"
             )
         elif hash_changed:
             summary = "Текст сайта Best Opportunity изменился"
-            details = "Контент на главной странице обновлен."
+            details = "Контент на странице обновлен. Новых регистрационных ссылок не найдено."
         else:
-            summary = "Сайт Best Opportunity без изменений"
+            summary = "Сайт Best Opportunity под наблюдением (без изменений)"
             details = "Новых регистрационных форм на сайте не обнаружено."
 
         return CheckResult(
             target_id=self.target.id,
             target_name=self.target.name,
             url=final_url,
-            is_open=is_alert,
+            is_alert=is_alert,
             status_changed=(hash_changed or bool(new_links)),
             previous_state=prev_hash,
-            current_state=current_hash,
+            current_state=TargetStatus.WATCHING.value,
             summary=summary,
             details=details,
             detected_links=detected_links,

@@ -1,7 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import Optional, List, Callable, Any
+from typing import Optional, List, Any
 import aiohttp
 from src.config import Config
 from src.logger import logger
@@ -47,7 +47,7 @@ class TelegramNotifier:
         target_name: str,
         url: str,
         details: str,
-        screenshot_path: Optional[str] = None,
+        screenshots: Optional[List[str]] = None,
         detected_links: Optional[List[str]] = None,
     ) -> bool:
         if not self.is_configured:
@@ -72,9 +72,23 @@ class TelegramNotifier:
             for link in detected_links[:5]:
                 caption += f"- <code>{link}</code>\n"
 
-        if screenshot_path and Path(screenshot_path).is_file():
-            return await self._send_photo(screenshot_path, caption, inline_keyboard)
-        return await self._send_message(caption, inline_keyboard)
+        valid_screenshots = [p for p in (screenshots or []) if Path(p).is_file()]
+
+        if not valid_screenshots:
+            return await self._send_message(caption, inline_keyboard)
+
+        # Send screenshots sequentially in structured blocks
+        total = len(valid_screenshots)
+        success = True
+        for i, photo_path in enumerate(valid_screenshots):
+            part_label = f" (Часть {i+1}/{total})" if total > 1 else ""
+            part_caption = f"<b>{title}</b>{part_label}\n<b>Цель:</b> {target_name}\n\n{details}" if i == 0 else f"<b>{target_name}</b>{part_label}"
+            markup = inline_keyboard if (i == total - 1) else None
+            ok = await self._send_photo(photo_path, part_caption, markup)
+            if not ok:
+                success = False
+
+        return success
 
     async def send_resolved(self, target_name: str, url: str) -> bool:
         if not self.is_configured:
@@ -96,9 +110,6 @@ class TelegramNotifier:
             f"<i>Интервал проверки: {Config.CHECK_INTERVAL_SECONDS}с.</i>"
         )
         return await self._send_message(message, disable_notification=True)
-
-    async def send_text(self, text: str, reply_markup: Optional[dict] = None) -> bool:
-        return await self._send_message(text, reply_markup=reply_markup)
 
     async def _send_message(
         self,
@@ -175,7 +186,7 @@ class TelegramNotifier:
             async with self._session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 resp_data = await resp.json()
                 if resp.status == 200 and resp_data.get("ok"):
-                    logger.info("Telegram photo sent.")
+                    logger.info(f"Telegram photo sent: {Path(photo_path).name}")
                     return True
                 logger.error(f"Telegram sendPhoto error: {resp_data}")
                 return await self._send_message(caption, reply_markup)
@@ -231,8 +242,8 @@ class TelegramNotifier:
                 "<b>SWS Watcher Bot</b>\n\n"
                 "Сервис непрерывного мониторинга визовых операторов UK SWS.\n\n"
                 "<b>Доступные команды:</b>\n"
-                "/status — Текущий статус всех отслеживаемых ресурсов\n"
-                "/check — Запустить внеочередную проверку прямо сейчас\n"
+                "/status — Текстовый отчет о статусе всех 4 ресурсов\n"
+                "/check — Полная визуальная проверка со скриншотами прямо сейчас\n"
                 "/help — Справка по командам"
             )
             await self._send_message(msg)
@@ -242,6 +253,5 @@ class TelegramNotifier:
             await self._send_message(report)
 
         elif cmd == "/check":
-            await self._send_message("Запускаю внеочередную проверку всех ресурсов...")
-            report = await engine.run_manual_check()
-            await self._send_message(report)
+            await self._send_message("Запускаю внеочередную проверку всех ресурсов со скриншотами...")
+            await engine.run_manual_visual_check()

@@ -7,7 +7,7 @@ from typing import Dict, Any, List
 import aiohttp
 from src.config import Config
 from src.logger import logger
-from src.models import TargetConfig, TargetType, CheckResult
+from src.models import TargetConfig, TargetType, CheckResult, TargetStatus
 from src.browser import ScreenshotEngine
 from src.notifier import TelegramNotifier
 from src.detectors import (
@@ -114,10 +114,10 @@ class MonitoringEngine:
                 target_id=target.id,
                 target_name=target.name,
                 url=target.url,
-                is_open=False,
+                is_alert=False,
                 status_changed=False,
                 previous_state=None,
-                current_state="NO_DETECTOR",
+                current_state=TargetStatus.ERROR.value,
                 summary=f"No detector registered for {target.id}",
                 details="Target skipped.",
                 error=f"Missing detector for type {target.target_type}",
@@ -142,10 +142,10 @@ class MonitoringEngine:
                 target_id=target.id,
                 target_name=target.name,
                 url=target.url,
-                is_open=False,
+                is_alert=False,
                 status_changed=False,
                 previous_state=previous_target_state.get("status"),
-                current_state="ERROR",
+                current_state=TargetStatus.ERROR.value,
                 summary=f"Connection error: {type(e).__name__}",
                 details=str(e),
                 error=str(e),
@@ -153,49 +153,44 @@ class MonitoringEngine:
 
     async def process_check_result(self, result: CheckResult) -> None:
         target_state = self.state.get(result.target_id, {})
-        prev_is_open = target_state.get("is_open", False)
+        prev_status = target_state.get("status")
 
-        should_alert = False
-        alert_title = ""
+        # Handle form open/close transitions for true forms
+        if result.target_id == "best_opp_form":
+            if result.current_state == TargetStatus.OPEN.value and prev_status == TargetStatus.CLOSED.value:
+                result.is_alert = True
+            elif result.current_state == TargetStatus.CLOSED.value and prev_status == TargetStatus.OPEN.value:
+                logger.info(f"[{result.target_name}] form closed.")
+                await self.notifier.send_resolved(result.target_name, result.url)
 
-        if result.is_open and not prev_is_open:
-            should_alert = True
-            alert_title = "Анкета открыта для приема заявок"
-        elif result.status_changed and result.is_open:
-            should_alert = True
-            alert_title = "Обновление регистрационной формы"
-        elif not result.is_open and prev_is_open:
-            logger.info(f"[{result.target_name}] closed, sending resolved notification.")
-            await self.notifier.send_resolved(result.target_name, result.url)
-
-        if should_alert:
+        if result.is_alert:
             logger.info(f"Alert triggered for [{result.target_name}]")
-            screenshot_path = await self.screenshot_engine.capture(result.url, result.target_id)
-            result.screenshot_path = screenshot_path
+            screenshots = await self.screenshot_engine.capture_chunks(result.url, result.target_id, max_chunks=3)
+            result.screenshots = screenshots
 
             try:
+                alert_title = "АНКЕТА ОТКРЫТА" if result.current_state == TargetStatus.OPEN.value else "ОБНОВЛЕНИЕ НА САЙТЕ"
                 await self.notifier.send_alert(
                     title=alert_title,
                     target_name=result.target_name,
                     url=result.url,
                     details=result.details,
-                    screenshot_path=screenshot_path,
+                    screenshots=screenshots,
                     detected_links=result.detected_links,
                 )
             finally:
-                # Clean up screenshot from disk after sending to save storage
-                if screenshot_path and Path(screenshot_path).is_file():
+                # Always clean up screenshots from disk immediately after sending
+                for path in screenshots:
                     try:
-                        Path(screenshot_path).unlink(missing_ok=True)
-                        logger.info(f"Cleaned up sent screenshot: {screenshot_path}")
-                    except Exception as err:
-                        logger.warning(f"Failed to delete screenshot: {err}")
+                        Path(path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
 
+        # Persist updated state
         self.state[result.target_id] = {
             "name": result.target_name,
             "url": result.url,
             "status": result.current_state,
-            "is_open": result.is_open,
             "hash": result.html_hash,
             "links": result.detected_links,
             "last_checked": datetime.now(UTC).isoformat(),
@@ -222,14 +217,12 @@ class MonitoringEngine:
         return valid_results
 
     def get_status_report(self) -> str:
-        """Builds a formatted status summary message for Telegram /status command."""
         lines = ["<b>SWS Watcher: Текущий статус целей</b>\n"]
         for target in Config.TARGETS:
             if not target.enabled:
                 continue
             data = self.state.get(target.id, {})
-            status = data.get("status", "NOT_CHECKED")
-            is_open = data.get("is_open", False)
+            status = data.get("status", TargetStatus.WATCHING.value)
             last_checked = data.get("last_checked", "—")
             if last_checked != "—":
                 try:
@@ -238,29 +231,51 @@ class MonitoringEngine:
                 except Exception:
                     pass
 
-            status_badge = "OPEN (Прием открыт)" if is_open else "CLOSED (Закрыто)"
             lines.append(
                 f"<b>{target.name}</b>\n"
-                f"- Статус: <code>{status_badge}</code>\n"
+                f"- Статус: <code>{status}</code>\n"
                 f"- Проверено: {last_checked}\n"
                 f"- URL: <code>{target.url}</code>\n"
             )
 
-        lines.append(f"<i>Интервал проверки: {Config.CHECK_INTERVAL_SECONDS}с. Все сервисы в норме.</i>")
+        lines.append(f"<i>Интервал проверки: {Config.CHECK_INTERVAL_SECONDS}с. Все сервисы активны.</i>")
         return "\n".join(lines)
 
-    async def run_manual_check(self) -> str:
-        """Executes on-demand check and returns formatted results for /check command."""
-        logger.info("Executing manual check requested via Telegram...")
-        results = await self.run_cycle()
-        lines = ["<b>Результаты внеочередной проверки:</b>\n"]
-        for r in results:
-            badge = "OPEN" if r.is_open else "CLOSED"
-            lines.append(
-                f"<b>{r.target_name}</b>: <code>{badge}</code>\n"
-                f"- {r.summary}\n"
-            )
-        return "\n".join(lines)
+    async def run_manual_visual_check(self) -> None:
+        """Executes on-demand check with human-readable viewport screenshots for each target."""
+        logger.info("Executing visual check requested via Telegram...")
+
+        for target in Config.TARGETS:
+            if not target.enabled or target.id not in self.detectors:
+                continue
+
+            # Run target inspection
+            res = await self.check_target(target)
+            
+            # Capture readable viewport chunks (up to 3 slices for long pages)
+            screenshots = await self.screenshot_engine.capture_chunks(target.url, target.id, max_chunks=3)
+
+            try:
+                await self.notifier.send_alert(
+                    title=f"Отчет проверки: {target.name}",
+                    target_name=target.name,
+                    url=res.url,
+                    details=f"<b>Статус:</b> <code>{res.current_state}</code>\n{res.summary}",
+                    screenshots=screenshots,
+                    detected_links=res.detected_links,
+                )
+            finally:
+                # Delete screenshots from disk immediately after delivery
+                for path in screenshots:
+                    try:
+                        Path(path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
+        # Send final completion message
+        await self.notifier.send_heartbeat(
+            "<b>Ручная проверка завершена.</b>\nВсе 4 ресурса проверены, актуальные снимки страниц отправлены выше."
+        )
 
     async def check_heartbeat(self) -> None:
         if Config.HEARTBEAT_INTERVAL_HOURS <= 0:
@@ -270,14 +285,13 @@ class MonitoringEngine:
         if now - self.last_heartbeat >= timedelta(hours=Config.HEARTBEAT_INTERVAL_HOURS):
             summary_lines = []
             for tid, tdata in self.state.items():
-                status_str = "OPEN" if tdata.get("is_open") else "CLOSED"
+                status_str = tdata.get("status", TargetStatus.WATCHING.value)
                 summary_lines.append(f"<b>{tdata.get('name')}:</b> {status_str}")
 
             await self.notifier.send_heartbeat("\n".join(summary_lines))
             self.last_heartbeat = now
 
     def _cleanup_old_screenshots(self) -> None:
-        """Removes any leftover screenshots in data directory on startup."""
         if Config.SCREENSHOTS_DIR.is_dir():
             for p in Config.SCREENSHOTS_DIR.glob("*.png"):
                 try:
@@ -296,9 +310,7 @@ class MonitoringEngine:
         if Config.ENABLE_SCREENSHOTS:
             await self.screenshot_engine.initialize()
 
-        # Start non-blocking Telegram command listener
         self._poller_task = asyncio.create_task(self.notifier.start_polling(self))
-
         logger.info(f"Engine started. Polling interval: {Config.CHECK_INTERVAL_SECONDS}s")
 
         try:

@@ -18,7 +18,7 @@ if hasattr(sys.stderr, "reconfigure"):
 from src.config import Config
 from src.logger import logger
 from src.engine import MonitoringEngine
-from src.browser import capture_screenshot
+from src.browser import capture_screenshots
 from src.notifier import TelegramNotifier
 
 
@@ -43,11 +43,13 @@ async def run_test_mode():
         print("Telegram not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env")
     await notifier.close()
 
-    print("\nTesting screenshot engine...")
+    print("\nTesting multi-chunk screenshot engine...")
     test_url = "https://forms.gle/kkdrh8aNPQNHQkCk8"
-    screenshot = await capture_screenshot(test_url, "test_target")
-    if screenshot:
-        print(f"Screenshot saved: {screenshot}")
+    screenshots = await capture_screenshots(test_url, "test_target", max_chunks=2)
+    if screenshots:
+        print(f"Captured {len(screenshots)} screenshot slice(s):")
+        for s in screenshots:
+            print(f"  - {s}")
     else:
         print("Screenshot capture disabled or failed.")
 
@@ -61,10 +63,9 @@ async def run_test_mode():
     try:
         results = await engine.run_cycle()
         for r in results:
-            status_label = "OPEN" if r.is_open else "CLOSED"
             print(f"\n[{r.target_name}]")
             print(f"  URL: {r.url}")
-            print(f"  Status: {status_label}")
+            print(f"  Status: {r.current_state}")
             print(f"  Summary: {r.summary}")
             if r.detected_links:
                 print(f"  Links: {len(r.detected_links)}")
