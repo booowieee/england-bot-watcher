@@ -151,17 +151,21 @@ class MonitoringEngine:
                 error=str(e),
             )
 
-    async def process_check_result(self, result: CheckResult) -> None:
+    async def process_check_result(self, result: CheckResult, is_baseline: bool = False) -> None:
         target_state = self.state.get(result.target_id, {})
         prev_status = target_state.get("status")
 
-        # Handle form open/close transitions for true forms
-        if result.target_id == "best_opp_form":
-            if result.current_state == TargetStatus.OPEN.value and prev_status == TargetStatus.CLOSED.value:
-                result.is_alert = True
-            elif result.current_state == TargetStatus.CLOSED.value and prev_status == TargetStatus.OPEN.value:
-                logger.info(f"[{result.target_name}] form closed.")
-                await self.notifier.send_resolved(result.target_name, result.url)
+        # Never trigger alerts during baseline startup unless Google Form is actively OPEN
+        if is_baseline:
+            result.is_alert = (result.target_id == "best_opp_form" and result.current_state == TargetStatus.OPEN.value)
+        else:
+            # Handle form open/close transitions
+            if result.target_id == "best_opp_form":
+                if result.current_state == TargetStatus.OPEN.value and prev_status == TargetStatus.CLOSED.value:
+                    result.is_alert = True
+                elif result.current_state == TargetStatus.CLOSED.value and prev_status == TargetStatus.OPEN.value:
+                    logger.info(f"[{result.target_name}] form closed.")
+                    await self.notifier.send_resolved(result.target_name, result.url)
 
         if result.is_alert:
             logger.info(f"Alert triggered for [{result.target_name}]")
@@ -198,7 +202,7 @@ class MonitoringEngine:
         }
         self._save_state()
 
-    async def run_cycle(self) -> List[CheckResult]:
+    async def run_cycle(self, is_baseline: bool = False) -> List[CheckResult]:
         tasks = []
         for target in Config.TARGETS:
             if target.enabled and target.id in self.detectors:
@@ -211,7 +215,7 @@ class MonitoringEngine:
             if isinstance(res, Exception):
                 logger.error(f"Unhandled exception in check cycle: {res}")
                 continue
-            await self.process_check_result(res)
+            await self.process_check_result(res, is_baseline=is_baseline)
             valid_results.append(res)
 
         return valid_results
@@ -249,10 +253,7 @@ class MonitoringEngine:
             if not target.enabled or target.id not in self.detectors:
                 continue
 
-            # Run target inspection
             res = await self.check_target(target)
-            
-            # Capture readable viewport chunks covering 100% of page height
             screenshots = await self.screenshot_engine.capture_chunks(target.url, target.id)
 
             try:
@@ -265,14 +266,12 @@ class MonitoringEngine:
                     detected_links=res.detected_links,
                 )
             finally:
-                # Delete screenshots from disk immediately after delivery
                 for path in screenshots:
                     try:
                         Path(path).unlink(missing_ok=True)
                     except Exception:
                         pass
 
-        # Send final completion message
         await self.notifier.send_heartbeat(
             "<b>Ручная проверка завершена.</b>\nВсе 4 ресурса проверены, актуальные снимки страниц отправлены выше."
         )
@@ -314,8 +313,8 @@ class MonitoringEngine:
         logger.info(f"Engine started. Polling interval: {Config.CHECK_INTERVAL_SECONDS}s")
 
         try:
-            logger.info("Running baseline inspection...")
-            results = await self.run_cycle()
+            logger.info("Running silent baseline inspection...")
+            results = await self.run_cycle(is_baseline=True)
             for r in results:
                 logger.info(f"[{r.target_name}] Baseline: {r.current_state}")
 
@@ -323,7 +322,7 @@ class MonitoringEngine:
                 try:
                     await asyncio.sleep(Config.CHECK_INTERVAL_SECONDS)
                     logger.debug("Executing inspection cycle...")
-                    await self.run_cycle()
+                    await self.run_cycle(is_baseline=False)
                     await self.check_heartbeat()
                 except asyncio.CancelledError:
                     logger.info("Engine received cancellation signal.")
