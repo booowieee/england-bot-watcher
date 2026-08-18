@@ -6,7 +6,7 @@
 ![Telegram](https://img.shields.io/badge/Telegram-Bot_API-26A5E4?logo=telegram&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-Асинхронный сервис мониторинга сайтов визовых операторов UK Seasonal Worker Scheme с мгновенной отправкой уведомлений со скриншотом в Telegram при открытии регистрационных форм и интерактивным управлением через команды.
+Асинхронный сервис мониторинга сайтов визовых операторов UK Seasonal Worker Scheme с мгновенной отправкой уведомлений со скриншотом в Telegram при открытии регистрационных форм, интерактивным управлением через команды и динамической системой раздачи доступа.
 
 ---
 
@@ -14,12 +14,17 @@
 
 - **Асинхронный мониторинг:** опрос целевых ресурсов через `asyncio` + `aiohttp` с пулом соединений и retry (exponential backoff).
 - **Специализированные детекторы:** для Google Forms, Best Opportunity, HOPS Labour Solutions и Concordia UK.
-- **Скриншоты и защита диска:** рендеринг через headless Playwright Chromium (singleton) с автоматическим удалением файла сразу после отправки в Telegram.
-- **Интерактивное управление через Telegram:**
-  - `/status` — вывод текущего статуса всех целей, ссылок и времени последней проверки.
-  - `/check` — принудительный запуск внеочередной проверки в реальном времени.
-  - `/help` — перечень доступных команд.
-- **Надежная доставка:** inline-кнопки перехода к анкете, plaintext fallback при ошибках парсинга, уведомления о закрытии формы (`RESOLVED`).
+- **Скриншоты и защита диска:** рендеринг через headless Playwright Chromium (singleton) с автоматическим разбиением длинных страниц на читаемые слайсы и удалением файлов сразу после отправки.
+- **Динамический контроль доступа (Whitelist & Approval):**
+  - Неавторизованный пользователь при отправке `/start` отправляет заявку администратору.
+  - Администратор получает интерактивное сообщение с кнопками `[Одобрить]` и `[Отклонить]`.
+  - Одобренные пользователи сохраняются в `data/whitelist.json` и автоматически получают все алерты и доступ к командам.
+- **Интерактивные команды:**
+  - `/status` — вывод актуального статуса всех целей.
+  - `/check` — принудительный запуск внеочередной проверки со скриншотами.
+  - `/users` — просмотр списка пользователей с доступом (для админа).
+  - `/revoke <id>` — отзыв доступа у пользователя.
+  - `/add <id>` — добавление пользователя вручную.
 - **Отказоустойчивость:** атомарная персистенция состояния с автоматическим бэкапом, graceful shutdown по `SIGINT` / `SIGTERM`.
 
 ---
@@ -30,37 +35,43 @@
 graph TD
     subgraph Scheduler ["Планировщик"]
         Loop["Asyncio Event Loop"]
+        StopEvent["asyncio.Event (graceful stop)"]
     end
 
     subgraph Engine ["Ядро мониторинга"]
-        Semaphore["Semaphore (max 4)"]
         HTTP["HTTP Client (aiohttp + TCPConnector)"]
         Retry["Retry (exponential backoff)"]
+        Semaphore["Semaphore (max 4)"]
         Detectors["Детекторы"]
         State["State (JSON + backup)"]
     end
 
     subgraph Verification ["Скриншотер"]
         Browser["Playwright Chromium (singleton)"]
+        Slicer["Viewport Slicer (до 8 слайсов)"]
         DiskCleaner["Auto Screenshot Cleanup"]
     end
 
-    subgraph Notifications ["Оповещения и команды"]
+    subgraph Notifications ["Оповещения и Whitelist"]
         Telegram["Telegram Bot API"]
-        Poller["Command Poller (/status, /check)"]
+        Poller["Command & Callback Poller"]
+        Whitelist["Whitelist Storage (whitelist.json)"]
         Fallback["Plaintext Fallback"]
     end
 
     Loop --> Semaphore
+    StopEvent -.->|Мгновенная остановка| Loop
     Semaphore --> HTTP
     HTTP --> Retry
     Retry --> Detectors
     Detectors <--> State
     Detectors -->|Изменение статуса| Browser
-    Browser --> Telegram
+    Browser --> Slicer
+    Slicer --> Telegram
     Telegram --> DiskCleaner
     Telegram -->|HTTP 400| Fallback
     Poller <--> Telegram
+    Poller <--> Whitelist
     Poller -->|/check| Engine
 ```
 
@@ -76,7 +87,7 @@ graph TD
 | HTTP | aiohttp | Неблокирующий клиент с пулом соединений |
 | Браузер | Playwright Chromium | Headless-скриншоты с блокировкой тяжелых ресурсов |
 | Парсинг | BeautifulSoup4 | Анализ DOM и извлечение ссылок |
-| Оповещения | Telegram Bot API | Доставка алертов, скриншотов и обработка команд |
+| Оповещения | Telegram Bot API | Рассылка алертов, инлайн-кнопки и интерактивный whitelist |
 | Контейнеризация | Docker Compose | Изоляция, автоперезапуск, volume-монтирование |
 
 ---
@@ -87,18 +98,21 @@ graph TD
 |--------|-----|-----------------|
 | Best Opportunity Form | `forms.gle/kkdrh8aNPQNHQkCk8` | Редирект `/closedform` -> `/viewform`, проверка полей ввода |
 | Best Opportunity Web | `jobopportunityuk.com` | Новые ссылки на формы, изменение iframe, хэш страницы |
-| HOPS Instructions | `hopslaboursolutions.com/recruitment-instructions` | Ссылки на регистрацию, regex по странам и датам |
+| HOPS Instructions | `hopslaboursolutions.com/recruitment-instructions` | Ссылки на регистрацию, структурные изменения контента |
 | Concordia UK | `concordia.org.uk` | Изменение ссылок на форму набора |
 
 ---
 
 ## Команды Telegram
 
-| Команда | Описание |
-|---------|----------|
-| `/status` | Выводит актуальный статус отслеживания по всем 4 ресурсам |
-| `/check` | Принудительно запускает полный цикл проверки и возвращает результат |
-| `/help` | Показывает список доступных команд |
+| Команда | Доступ | Описание |
+|---------|--------|----------|
+| `/status` | Все одобренные | Выводит актуальный статус отслеживания по всем 4 ресурсам |
+| `/check` | Все одобренные | Принудительно запускает полный цикл проверки со скриншотами |
+| `/help` | Все одобренные | Показывает список доступных команд |
+| `/users` | Администратор | Выводит список всех пользователей в белом списке |
+| `/revoke <id>` | Администратор | Отзывает доступ у пользователя по ID |
+| `/add <id>` | Администратор | Вручную добавляет ID пользователя в белый список |
 
 ---
 
@@ -119,7 +133,7 @@ playwright install chromium
 **Конфигурация:**
 ```bash
 cp .env.example .env
-# Заполнить TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID
+# Заполнить TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID и TELEGRAM_ADMIN_ID
 ```
 
 **Диагностика:**
@@ -152,6 +166,7 @@ england-bot-watcher/
 │   └── architecture.md
 ├── data/
 │   ├── monitor_state.json
+│   ├── whitelist.json
 │   └── screenshots/
 ├── logs/
 ├── src/
@@ -167,6 +182,7 @@ england-bot-watcher/
 │   ├── logger.py
 │   ├── models.py
 │   ├── notifier.py
+│   ├── whitelist.py
 │   └── main.py
 ├── .env.example
 ├── .gitignore

@@ -254,9 +254,9 @@ class MonitoringEngine:
         lines.append(f"<i>Интервал проверки: {Config.CHECK_INTERVAL_SECONDS}с. Все сервисы активны.</i>")
         return "\n".join(lines)
 
-    async def run_manual_visual_check(self) -> None:
+    async def run_manual_visual_check_for(self, chat_id: str | None = None) -> None:
         """Executes on-demand check with human-readable viewport screenshots for each target."""
-        logger.info("Executing visual check requested via Telegram...")
+        logger.info(f"Executing visual check requested by chat {chat_id or 'broadcast'}...")
 
         for target in Config.TARGETS:
             if not target.enabled or target.id not in self.detectors:
@@ -266,14 +266,30 @@ class MonitoringEngine:
             screenshots = await self.screenshot_engine.capture_chunks(target.url, target.id)
 
             try:
-                await self.notifier.send_alert(
-                    title=f"Отчет проверки: {target.name}",
-                    target_name=target.name,
-                    url=res.url,
-                    details=f"<b>Статус:</b> <code>{res.current_state}</code>\n{res.summary}",
-                    screenshots=screenshots,
-                    detected_links=res.detected_links,
-                )
+                if chat_id:
+                    # Deliver specifically to the requesting user
+                    details = f"<b>Статус:</b> <code>{res.current_state}</code>\n{res.summary}"
+                    title = f"Отчет проверки: {target.name}"
+                    inline_keyboard = {"inline_keyboard": [[{"text": "Открыть анкету", "url": res.url}]]}
+
+                    if not screenshots:
+                        await self.notifier._send_message_to(chat_id, f"<b>{title}</b>\n\n{details}", inline_keyboard)
+                    else:
+                        total = len(screenshots)
+                        for i, photo_path in enumerate(screenshots):
+                            part_label = f" (Часть {i+1}/{total})" if total > 1 else ""
+                            part_caption = f"<b>{title}</b>{part_label}\n<b>Цель:</b> {target.name}\n\n{details}" if i == 0 else f"<b>{target.name}</b>{part_label}"
+                            markup = inline_keyboard if (i == total - 1) else None
+                            await self.notifier._send_photo_to(chat_id, photo_path, part_caption, markup)
+                else:
+                    await self.notifier.send_alert(
+                        title=f"Отчет проверки: {target.name}",
+                        target_name=target.name,
+                        url=res.url,
+                        details=f"<b>Статус:</b> <code>{res.current_state}</code>\n{res.summary}",
+                        screenshots=screenshots,
+                        detected_links=res.detected_links,
+                    )
             finally:
                 for path in screenshots:
                     try:
@@ -281,9 +297,11 @@ class MonitoringEngine:
                     except Exception:
                         pass
 
-        await self.notifier.send_heartbeat(
-            "<b>Ручная проверка завершена.</b>\nВсе ресурсы проверены, актуальные снимки страниц отправлены выше."
-        )
+        completion_msg = "<b>Ручная проверка завершена.</b>\nВсе ресурсы проверены, актуальные снимки страниц отправлены выше."
+        if chat_id:
+            await self.notifier._send_message_to(chat_id, completion_msg)
+        else:
+            await self.notifier.send_heartbeat(completion_msg)
 
     async def check_heartbeat(self) -> None:
         if Config.HEARTBEAT_INTERVAL_HOURS <= 0:

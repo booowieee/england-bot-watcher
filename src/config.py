@@ -11,6 +11,7 @@ load_dotenv(BASE_DIR / ".env")
 class Config:
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    ADMIN_CHAT_ID: str = os.getenv("TELEGRAM_ADMIN_ID", "").strip() or os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
     CHECK_INTERVAL_SECONDS: int = int(os.getenv("CHECK_INTERVAL_SECONDS", "45"))
     HEARTBEAT_INTERVAL_HOURS: int = int(os.getenv("HEARTBEAT_INTERVAL_HOURS", "12"))
@@ -20,6 +21,7 @@ class Config:
 
     DATA_DIR: Path = BASE_DIR / "data"
     STATE_FILE: Path = DATA_DIR / "monitor_state.json"
+    WHITELIST_FILE: Path = DATA_DIR / "whitelist.json"
     SCREENSHOTS_DIR: Path = DATA_DIR / "screenshots"
     LOGS_DIR: Path = BASE_DIR / "logs"
 
