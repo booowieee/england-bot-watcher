@@ -29,7 +29,7 @@ class MonitoringEngine:
         self.state_file = Config.STATE_FILE
         self.state: Dict[str, Any] = self._load_state()
         self.last_heartbeat: datetime = datetime.now(UTC)
-        self.last_wayback_archive: datetime = datetime.now(UTC)
+        self.last_wayback_archive: datetime = datetime.min.replace(tzinfo=UTC)
         self.is_running: bool = False
         self._stop_event: asyncio.Event | None = None
         self._session: aiohttp.ClientSession | None = None

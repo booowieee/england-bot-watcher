@@ -1,7 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Set
 import aiohttp
 from src.config import Config
 from src.logger import logger
@@ -25,6 +25,7 @@ class TelegramNotifier:
         self._owned_session: Optional[aiohttp.ClientSession] = None
         self._is_polling = False
         self.whitelist = WhitelistManager()
+        self._pending_access_requests: Set[str] = set()
 
     @property
     def is_configured(self) -> bool:
@@ -83,19 +84,23 @@ class TelegramNotifier:
         overall_success = True
 
         for cid in target_chat_ids:
-            if not valid_screenshots:
-                ok = await self._send_message_to(cid, caption, inline_keyboard)
-                if not ok:
-                    overall_success = False
-            else:
-                total = len(valid_screenshots)
-                for i, photo_path in enumerate(valid_screenshots):
-                    part_label = f" (Часть {i+1}/{total})" if total > 1 else ""
-                    part_caption = f"<b>{title}</b>{part_label}\n<b>Цель:</b> {target_name}\n\n{details}" if i == 0 else f"<b>{target_name}</b>{part_label}"
-                    markup = inline_keyboard if (i == total - 1) else None
-                    ok = await self._send_photo_to(cid, photo_path, part_caption, markup)
+            try:
+                if not valid_screenshots:
+                    ok = await self._send_message_to(cid, caption, inline_keyboard)
                     if not ok:
                         overall_success = False
+                else:
+                    total = len(valid_screenshots)
+                    for i, photo_path in enumerate(valid_screenshots):
+                        part_label = f" (Часть {i+1}/{total})" if total > 1 else ""
+                        part_caption = f"<b>{title}</b>{part_label}\n<b>Цель:</b> {target_name}\n\n{details}" if i == 0 else f"<b>{target_name}</b>{part_label}"
+                        markup = inline_keyboard if (i == total - 1) else None
+                        ok = await self._send_photo_to(cid, photo_path, part_caption, markup)
+                        if not ok:
+                            overall_success = False
+            except Exception as e:
+                logger.error(f"Failed to deliver alert to chat {cid}: {e}")
+                overall_success = False
 
         return overall_success
 
@@ -109,7 +114,10 @@ class TelegramNotifier:
             f"Прием заявок прекращен."
         )
         for cid in self.whitelist.get_all_chat_ids():
-            await self._send_message_to(cid, message)
+            try:
+                await self._send_message_to(cid, message)
+            except Exception:
+                pass
         return True
 
     async def send_heartbeat(self, status_summary: str) -> bool:
@@ -121,7 +129,10 @@ class TelegramNotifier:
             f"<i>Интервал проверки: {Config.CHECK_INTERVAL_SECONDS}с.</i>"
         )
         for cid in self.whitelist.get_all_chat_ids():
-            await self._send_message_to(cid, message, disable_notification=True)
+            try:
+                await self._send_message_to(cid, message, disable_notification=True)
+            except Exception:
+                pass
         return True
 
     async def _send_message_to(
@@ -253,13 +264,13 @@ class TelegramNotifier:
                         for update in data.get("result", []):
                             offset = update["update_id"] + 1
 
-                            # 1. Handle Callback Query from Admin
+                            # Handle inline button callbacks (admin approval/rejection)
                             callback = update.get("callback_query")
                             if callback:
                                 await self._handle_callback(callback)
                                 continue
 
-                            # 2. Handle Messages
+                            # Handle direct messages
                             message = update.get("message")
                             if not message:
                                 continue
@@ -274,12 +285,14 @@ class TelegramNotifier:
                             if not chat_id:
                                 continue
 
-                            # Check whitelist access
+                            # Unauthorized users: send ONE approval request, ignore repeats
                             if not self.whitelist.is_allowed(chat_id):
-                                await self._handle_unauthorized_user(chat_id, username, first_name)
+                                if chat_id not in self._pending_access_requests:
+                                    self._pending_access_requests.add(chat_id)
+                                    await self._handle_unauthorized_user(chat_id, username, first_name)
                                 continue
 
-                            # Process authorized commands
+                            # Authorized users: process commands
                             if text.startswith("/"):
                                 await self._handle_command(chat_id, text, engine)
                     else:
@@ -294,7 +307,6 @@ class TelegramNotifier:
         """Notifies admin about a new access request and informs the user."""
         logger.info(f"Access request from unauthorized user: {chat_id} (@{username})")
 
-        # Reply to user
         await self._send_message_to(
             chat_id,
             "⏳ <b>Запрос на доступ отправлен</b>\n\n"
@@ -302,7 +314,6 @@ class TelegramNotifier:
             "Как только доступ будет одобрен, вы получите сообщение."
         )
 
-        # Notify Admin with inline buttons
         uname_display = f"@{username}" if username else first_name or "Не указано"
         admin_msg = (
             "<b>Запрос на доступ к SWS Watcher Bot</b>\n\n"
@@ -334,9 +345,17 @@ class TelegramNotifier:
             await self._answer_callback_query(callback_id, "Только администратор может одобрять доступ.")
             return
 
-        if data.startswith("auth_approve:"):
-            _, target_cid, target_uname = data.split(":", 2)
+        # Safely parse callback_data (format: "action:target_cid:target_uname")
+        parts = data.split(":", 2)
+        if len(parts) < 3:
+            await self._answer_callback_query(callback_id, "Некорректный формат данных.")
+            return
+
+        action, target_cid, target_uname = parts
+
+        if action == "auth_approve":
             self.whitelist.add_user(target_cid, username=target_uname)
+            self._pending_access_requests.discard(target_cid)
             await self._answer_callback_query(callback_id, "Доступ одобрен!")
 
             if msg_id:
@@ -345,7 +364,6 @@ class TelegramNotifier:
                     f"<b>Доступ одобрен</b> для пользователя @{target_uname} (<code>{target_cid}</code>)."
                 )
 
-            # Inform approved user
             await self._send_message_to(
                 target_cid,
                 "<b>Доступ предоставлен!</b>\n\n"
@@ -354,11 +372,12 @@ class TelegramNotifier:
                 "<b>Команды управления:</b>\n"
                 "/status — Текущий статус целей\n"
                 "/check — Полная визуальная проверка прямо сейчас\n"
+                "/archive — Сохранить страницы в веб-архиве\n"
                 "/help — Справка"
             )
 
-        elif data.startswith("auth_deny:"):
-            _, target_cid, target_uname = data.split(":", 2)
+        elif action == "auth_deny":
+            self._pending_access_requests.discard(target_cid)
             await self._answer_callback_query(callback_id, "Запрос отклонен.")
 
             if msg_id:
@@ -367,7 +386,6 @@ class TelegramNotifier:
                     f"<b>Запрос отклонен</b> для пользователя @{target_uname} (<code>{target_cid}</code>)."
                 )
 
-            # Inform rejected user
             await self._send_message_to(
                 target_cid,
                 "<b>В доступе отказано</b>\n\nАдминистратор отклонил ваш запрос на доступ к боту."
@@ -392,6 +410,7 @@ class TelegramNotifier:
                 "<b>Доступные команды:</b>\n"
                 "/status — Текстовый отчет о статусе всех ресурсов\n"
                 "/check — Полная визуальная проверка со скриншотами\n"
+                "/archive — Сохранить страницы в Wayback Machine\n"
                 "/help — Справка по командам"
                 f"{admin_section}"
             )
@@ -403,10 +422,12 @@ class TelegramNotifier:
 
         elif cmd == "/check":
             await self._send_message_to(chat_id, "Запускаю внеочередную проверку всех ресурсов со скриншотами...")
-            await engine.run_manual_visual_check_for(chat_id)
+            # Run in background task so the polling loop is not blocked for 30-60 seconds
+            asyncio.create_task(engine.run_manual_visual_check_for(chat_id))
 
         elif cmd == "/archive":
-            await engine.run_manual_archive(chat_id)
+            # Run in background task to keep polling responsive
+            asyncio.create_task(engine.run_manual_archive(chat_id))
 
         elif cmd in ("/users", "/whitelist") and is_adm:
             report = self.whitelist.get_users_report()

@@ -19,6 +19,8 @@ dist/
 # Runtime data
 data/monitor_state.json
 data/monitor_state.json.bak
+data/whitelist.json
+data/whitelist.tmp
 data/screenshots/*.png
 logs/*.log
 
