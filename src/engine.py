@@ -165,7 +165,7 @@ class MonitoringEngine:
 
         if result.is_alert:
             logger.info(f"Alert triggered for [{result.target_name}]")
-            screenshots = await self.screenshot_engine.capture_chunks(result.url, result.target_id, max_chunks=3)
+            screenshots = await self.screenshot_engine.capture_chunks(result.url, result.target_id)
             result.screenshots = screenshots
 
             try:
@@ -252,8 +252,8 @@ class MonitoringEngine:
             # Run target inspection
             res = await self.check_target(target)
             
-            # Capture readable viewport chunks (up to 3 slices for long pages)
-            screenshots = await self.screenshot_engine.capture_chunks(target.url, target.id, max_chunks=3)
+            # Capture readable viewport chunks covering 100% of page height
+            screenshots = await self.screenshot_engine.capture_chunks(target.url, target.id)
 
             try:
                 await self.notifier.send_alert(

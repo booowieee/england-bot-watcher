@@ -1,4 +1,3 @@
-import re
 from typing import Dict, Any, Optional, List
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
@@ -7,19 +6,6 @@ from src.models import CheckResult, TargetStatus
 
 
 class HopsDetector(BaseDetector):
-    KEYWORD_TRIGGERS = [
-        r"\bmoldova\b",
-        r"\bмолдова\b",
-        r"\bмолдави[ияе]\b",
-        r"регистрация откроется",
-        r"online registration will open",
-        r"recruitment window",
-        r"apply now",
-        r"new intake",
-        r"season 2026",
-        r"season 2027",
-    ]
-
     FORM_DOMAINS = [
         "forms.gle",
         "docs.google.com/forms",
@@ -27,6 +13,7 @@ class HopsDetector(BaseDetector):
         "typeform.com",
         "forms.office.com",
         "jotform.com",
+        "thegateway",
     ]
 
     async def analyze(
@@ -37,7 +24,6 @@ class HopsDetector(BaseDetector):
         previous_state: Optional[Dict[str, Any]] = None
     ) -> CheckResult:
         soup = BeautifulSoup(html, "html.parser")
-        html_lower = html.lower()
 
         found_form_links: List[str] = []
         for a_tag in soup.find_all("a", href=True):
@@ -47,10 +33,9 @@ class HopsDetector(BaseDetector):
                 if full_url not in found_form_links:
                     found_form_links.append(full_url)
 
-        matched_keywords: List[str] = []
-        for pattern in self.KEYWORD_TRIGGERS:
-            if re.search(pattern, html_lower, re.IGNORECASE):
-                matched_keywords.append(pattern.replace(r"\b", ""))
+        # Decompose scripts and styles to compute stable text hash
+        for tag in soup(["script", "style", "noscript", "svg", "header", "footer"]):
+            tag.decompose()
 
         text_content = soup.get_text(separator=" ", strip=True)
         current_hash = self.calculate_hash(text_content)
@@ -58,34 +43,21 @@ class HopsDetector(BaseDetector):
         is_initial_run = not previous_state
         prev_hash = previous_state.get("hash") if previous_state else None
         prev_links = previous_state.get("links", []) if previous_state else []
-        prev_keywords = previous_state.get("matched_keywords", []) if previous_state else []
 
         new_links = [link for link in found_form_links if link not in prev_links] if not is_initial_run else []
-        new_keywords = [kw for kw in matched_keywords if kw not in prev_keywords] if not is_initial_run else []
         hash_changed = bool(prev_hash is not None and prev_hash != current_hash)
 
-        is_alert = False
-        alert_reasons = []
+        is_alert = bool(new_links or hash_changed)
 
         if new_links:
-            is_alert = True
-            alert_reasons.append(f"Обнаружены новые ссылки на регистрацию ({len(new_links)} шт.)")
-
-        if new_keywords:
-            is_alert = True
-            alert_reasons.append(f"Новые ключевые слова: {', '.join(new_keywords)}")
-
-        if hash_changed and not is_alert:
+            summary = "Обнаружены новые ссылки на регистрацию HOPS"
+            details = f"На странице появились новые ссылки для подачи заявок ({len(new_links)} шт.)."
+        elif hash_changed:
             summary = "Текст инструкций HOPS обновлен"
-            details = "На странице изменился контент. Новых регистрационных ссылок не обнаружено."
-        elif is_alert:
-            summary = "Обновление в инструкциях HOPS"
-            details = "\n".join([f"- {r}" for r in alert_reasons])
-            if matched_keywords:
-                details += f"\n- Все совпадения: {', '.join(matched_keywords)}"
+            details = "На странице изменился контент правил набора."
         else:
             summary = "Страница HOPS под наблюдением (без изменений)"
-            details = "Новых регистрационных ссылок не обнаружено."
+            details = "Новых регистрационных ссылок или изменений в тексте не обнаружено."
 
         return CheckResult(
             target_id=self.target.id,

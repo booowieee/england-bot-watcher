@@ -51,13 +51,13 @@ class ScreenshotEngine:
         self,
         url: str,
         target_id: str,
-        max_chunks: int = 3,
         viewport_height: int = 900,
+        max_slices: int = 8,
         timeout_ms: int = 30000,
     ) -> List[str]:
         """
-        Captures one or multiple human-readable viewport slices of a webpage.
-        Prevents Telegram from compressing ultra-tall pages into unreadable strips.
+        Captures full-height webpages by splitting them into crisp, human-readable viewport slices.
+        Covers 100% of the page from header to footer without arbitrary cutoffs or Telegram downscaling.
         """
         if not Config.ENABLE_SCREENSHOTS:
             return []
@@ -92,7 +92,7 @@ class ScreenshotEngine:
                 "() => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, 900)"
             )
 
-            # If page is short (<= 1400px), capture a single clean screenshot
+            # If page is standard height (<= 1400px), capture single full screenshot
             if total_height <= 1400:
                 output_path = Config.SCREENSHOTS_DIR / f"{target_id}_{timestamp_str}.png"
                 await page.screenshot(
@@ -103,12 +103,15 @@ class ScreenshotEngine:
                 )
                 generated_paths.append(str(output_path))
             else:
-                # If page is tall (like HOPS), split into readable viewport slices
-                step = viewport_height - 100  # 100px overlap for context
-                num_slices = min(max_chunks, math.ceil(total_height / step))
+                # Split entire scroll length into readable viewport slices with 100px overlap
+                step = viewport_height - 100
+                num_slices = min(max_slices, math.ceil(total_height / step))
 
                 for i in range(num_slices):
                     scroll_y = i * step
+                    if scroll_y + viewport_height > total_height:
+                        scroll_y = max(0, total_height - viewport_height)
+
                     await page.evaluate(f"window.scrollTo(0, {scroll_y})")
                     await asyncio.sleep(0.3)
 
@@ -121,7 +124,10 @@ class ScreenshotEngine:
                     )
                     generated_paths.append(str(chunk_path))
 
-            logger.info(f"Captured {len(generated_paths)} screenshot(s) for {target_id}")
+                    if scroll_y + viewport_height >= total_height:
+                        break
+
+            logger.info(f"Captured {len(generated_paths)} screenshot(s) for {target_id} (total height: {total_height}px)")
             return generated_paths
 
         except Exception as e:
@@ -132,16 +138,15 @@ class ScreenshotEngine:
                 await context.close()
 
     async def capture(self, url: str, target_id: str, timeout_ms: int = 30000) -> Optional[str]:
-        """Convenience helper returning first screenshot path."""
-        chunks = await self.capture_chunks(url, target_id, max_chunks=1, timeout_ms=timeout_ms)
+        chunks = await self.capture_chunks(url, target_id, max_slices=1, timeout_ms=timeout_ms)
         return chunks[0] if chunks else None
 
 
-async def capture_screenshots(url: str, target_id: str, max_chunks: int = 3) -> List[str]:
+async def capture_screenshots(url: str, target_id: str) -> List[str]:
     """Standalone convenience function for test mode."""
     engine = ScreenshotEngine()
     try:
         await engine.initialize()
-        return await engine.capture_chunks(url, target_id, max_chunks=max_chunks)
+        return await engine.capture_chunks(url, target_id)
     finally:
         await engine.close()

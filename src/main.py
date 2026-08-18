@@ -45,7 +45,7 @@ async def run_test_mode():
 
     print("\nTesting multi-chunk screenshot engine...")
     test_url = "https://forms.gle/kkdrh8aNPQNHQkCk8"
-    screenshots = await capture_screenshots(test_url, "test_target", max_chunks=2)
+    screenshots = await capture_screenshots(test_url, "test_target")
     if screenshots:
         print(f"Captured {len(screenshots)} screenshot slice(s):")
         for s in screenshots:
