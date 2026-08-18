@@ -6,8 +6,7 @@ from playwright.async_api import async_playwright, Browser, Playwright
 from src.config import Config
 from src.logger import logger
 
-
-BLOCKED_RESOURCE_TYPES = {"image", "font", "media", "stylesheet"}
+BLOCKED_RESOURCE_TYPES = {"media"}
 BLOCKED_URL_FRAGMENTS = {"google-analytics", "googletagmanager", "facebook.net", "doubleclick"}
 
 
@@ -76,7 +75,12 @@ class ScreenshotEngine:
             except Exception:
                 pass
 
-            await page.screenshot(path=str(output_path), full_page=True)
+            await page.screenshot(
+                path=str(output_path),
+                full_page=True,
+                timeout=15000,
+                animations="disabled",
+            )
             logger.info(f"Screenshot saved: {output_path}")
             return str(output_path)
 
@@ -89,7 +93,6 @@ class ScreenshotEngine:
 
 
 async def capture_screenshot(url: str, target_id: str, timeout_ms: int = 30000) -> Optional[str]:
-    """Standalone convenience function for one-off captures (test mode)."""
     engine = ScreenshotEngine()
     try:
         await engine.initialize()

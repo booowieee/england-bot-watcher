@@ -41,13 +41,14 @@ class BestOpportunityWebDetector(BaseDetector):
         text_content = soup.get_text(separator=" ", strip=True)
         current_hash = self.calculate_hash(text_content)
 
+        is_initial_run = not previous_state
         prev_hash = previous_state.get("hash") if previous_state else None
         prev_links = previous_state.get("links", []) if previous_state else []
 
-        new_links = [l for l in detected_links if l not in prev_links]
+        new_links = [l for l in detected_links if l not in prev_links] if not is_initial_run else []
         hash_changed = (prev_hash is not None and prev_hash != current_hash)
 
-        is_alert = bool(new_links) or (hash_changed and any("form" in l for l in detected_links))
+        is_alert = bool(new_links)
 
         if is_alert:
             summary = "Обновление на сайте Best Opportunity"

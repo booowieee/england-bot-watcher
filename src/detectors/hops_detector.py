@@ -55,10 +55,11 @@ class HopsDetector(BaseDetector):
         text_content = soup.get_text(separator=" ", strip=True)
         current_hash = self.calculate_hash(text_content)
 
+        is_initial_run = not previous_state
         prev_hash = previous_state.get("hash") if previous_state else None
         prev_links = previous_state.get("links", []) if previous_state else []
 
-        new_links = [link for link in found_form_links if link not in prev_links]
+        new_links = [link for link in found_form_links if link not in prev_links] if not is_initial_run else []
         hash_changed = (prev_hash is not None and prev_hash != current_hash)
 
         is_alert = False
@@ -68,8 +69,8 @@ class HopsDetector(BaseDetector):
             is_alert = True
             alert_reasons.append(f"Обнаружены новые ссылки на регистрацию ({len(new_links)} шт.)")
 
-        if "moldova" in matched_keywords or "молдова" in matched_keywords:
-            if not previous_state or "moldova" not in previous_state.get("matched_keywords", []):
+        if not is_initial_run and ("moldova" in matched_keywords or "молдова" in matched_keywords):
+            if "moldova" not in previous_state.get("matched_keywords", []):
                 is_alert = True
                 alert_reasons.append("Обнаружено упоминание Молдовы в правилах набора")
 
