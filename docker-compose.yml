@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  england-bot-watcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: england_bot_watcher
+    restart: always
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - CHECK_INTERVAL_SECONDS=${CHECK_INTERVAL_SECONDS:-45}
+      - HEARTBEAT_INTERVAL_HOURS=${HEARTBEAT_INTERVAL_HOURS:-12}
+      - ENABLE_SCREENSHOTS=${ENABLE_SCREENSHOTS:-true}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    shm_size: '512mb' # Необходимый размер shared memory для стабильной работы Playwright Chromium
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
